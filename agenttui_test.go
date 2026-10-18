@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/stretchr/testify/assert"
@@ -549,4 +550,34 @@ func TestApp_ClaudeStyleFraming(t *testing.T) {
 	// Verify Error card framing
 	assert.Contains(t, rendered, "✗ Error")
 	assert.Contains(t, rendered, "Failed to connect to backend")
+}
+
+func TestApp_ResetSession(t *testing.T) {
+	app := New(Config{
+		Title: "TestApp",
+	})
+	app.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+
+	// Add messages, sidebar, changed files, token counts
+	app.AddMessage(Message{Role: RoleUser, Content: "Hello world"})
+	app.AddMessage(Message{Role: RoleAssistant, Content: "Response"})
+	app.SetSidebar(NewStatusListWidget("Plan", app.GetTheme()))
+	app.SetChangedFiles([]string{"file1.go", "file2.go"})
+	app.SetContextTokens(5000, 100000)
+
+	assert.Len(t, app.messages, 2)
+	assert.NotNil(t, app.sidebar)
+	assert.Len(t, app.changedFiles, 2)
+	assert.Equal(t, 5000, app.contextUsed)
+
+	// Call ResetSession()
+	app.ResetSession()
+
+	// Verify all state is reset cleanly
+	assert.Empty(t, app.messages, "Messages must be empty after ResetSession")
+	assert.Nil(t, app.sidebar, "Sidebar widget must be nil after ResetSession")
+	assert.Empty(t, app.changedFiles, "Changed files must be empty after ResetSession")
+	assert.Equal(t, 0, app.contextUsed, "Context tokens must be 0 after ResetSession")
+	assert.Equal(t, 0, app.totalTokens, "Total tokens must be 0 after ResetSession")
+	assert.WithinDuration(t, time.Now(), app.startTime, 1*time.Second, "Session start time must be reset to now")
 }

@@ -319,6 +319,26 @@ func (a *App) ClearMessages() {
 	}
 }
 
+// ResetSession clears all conversation messages, history, sidebar widgets,
+// changed files, and resets session timer and context counters.
+func (a *App) ResetSession() {
+	a.mu.Lock()
+	a.messages = nil
+	a.sidebar = nil
+	a.changedFiles = nil
+	a.contextUsed = 0
+	a.totalTokens = 0
+	a.historyIdx = -1
+	a.startTime = time.Now()
+	a.mu.Unlock()
+	a.cacheCount = 0
+	a.renderedCache = ""
+	if a.ready {
+		a.viewport.SetContent(a.renderMessages())
+		a.viewport.GotoTop()
+	}
+}
+
 // EmitToolStart logs a tool beginning execution in the stream.
 func (a *App) EmitToolStart(id, name, args string) {
 	a.AddMessage(Message{
