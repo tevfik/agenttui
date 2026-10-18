@@ -3,6 +3,7 @@ package agenttui
 import (
 	"context"
 	"fmt"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -684,5 +685,106 @@ func TestApp_MouseClickChatInputDoesNotToggleThinking(t *testing.T) {
 	app.Update(bannerClick)
 	assert.False(t, app.messages[0].ThinkingOpen, "Clicking specifically on the Thought banner again MUST collapse thinking")
 }
+
+func TestApp_ThemesListAndSwitch(t *testing.T) {
+	themes := AvailableThemes()
+	assert.Contains(t, themes, "claude")
+	assert.Contains(t, themes, "devran")
+	assert.Contains(t, themes, "catppuccin")
+	assert.Contains(t, themes, "tokyo-night")
+	assert.Contains(t, themes, "dracula")
+	assert.Contains(t, themes, "nord")
+	assert.Contains(t, themes, "gruvbox")
+
+	for _, name := range themes {
+		th := ThemeByName(name)
+		assert.Equal(t, name, th.Name)
+		assert.NotNil(t, th.Primary)
+		assert.NotNil(t, th.Border)
+	}
+
+	app := New(Config{})
+	app.SetTheme(CatppuccinTheme())
+	assert.Equal(t, "catppuccin", app.GetTheme().Name)
+}
+
+func TestApp_RewindLastTurn(t *testing.T) {
+	app := New(Config{})
+	app.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+	app.initDone = true
+
+	// Turn 1
+	app.AddMessage(Message{Role: RoleUser, Content: "Hello model"})
+	app.AddMessage(Message{Role: RoleAssistant, Content: "Hello user"})
+
+	// Turn 2
+	app.AddMessage(Message{Role: RoleUser, Content: "Refactor this function"})
+	app.AddMessage(Message{Role: RoleTool, Tool: &ToolCall{Name: "read_file"}})
+	app.AddMessage(Message{Role: RoleAssistant, Content: "Here is the refactored function"})
+
+	assert.Len(t, app.messages, 5)
+
+	// Rewind Turn 2
+	prompt, ok := app.RewindLastTurn()
+	assert.True(t, ok)
+	assert.Equal(t, "Refactor this function", prompt)
+	assert.Equal(t, "Refactor this function", app.textarea.Value(), "User prompt must be restored to textarea")
+	assert.Len(t, app.messages, 2, "Only Turn 1 messages should remain")
+}
+
+func TestApp_ToggleSidebar(t *testing.T) {
+	app := New(Config{})
+	app.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	app.initDone = true
+
+	assert.False(t, app.IsSidebarHidden())
+	assert.Equal(t, 24, app.sidebarWidth())
+
+	// Toggle off
+	app.ToggleSidebar()
+	assert.True(t, app.IsSidebarHidden())
+	assert.Equal(t, 0, app.sidebarWidth())
+
+	// Toggle back on
+	app.ToggleSidebar()
+	assert.False(t, app.IsSidebarHidden())
+	assert.Equal(t, 24, app.sidebarWidth())
+}
+
+func TestApp_ExportSession(t *testing.T) {
+	tempDir := t.TempDir()
+	app := New(Config{Title: "Devran Test"})
+	app.AddMessage(Message{Role: RoleUser, Content: "Analyze code"})
+	app.AddMessage(Message{
+		Role:         RoleAssistant,
+		Content:      "Analysis complete.",
+		Thinking:     "Inspecting symbols...",
+		ThinkingTime: 500 * time.Millisecond,
+	})
+
+	mdPath, htmlPath, err := app.ExportSession(tempDir, "test-session")
+	assert.NoError(t, err)
+	assert.FileExists(t, mdPath)
+	assert.FileExists(t, htmlPath)
+
+	mdBytes, _ := os.ReadFile(mdPath)
+	assert.Contains(t, string(mdBytes), "Analyze code")
+	assert.Contains(t, string(mdBytes), "Thinking Process (Thought)")
+	assert.Contains(t, string(mdBytes), "Analysis complete.")
+
+	htmlBytes, _ := os.ReadFile(htmlPath)
+	assert.Contains(t, string(htmlBytes), "<details>")
+	assert.Contains(t, string(htmlBytes), "Inspecting symbols...")
+	assert.Contains(t, string(htmlBytes), "Analysis complete.")
+}
+
+func TestApp_ExtractCodeBlocks(t *testing.T) {
+	md := "Here is some code:\n```go\nfunc Main() {}\n```\nAnd explanation:\n```python\nprint('hello')\n```"
+	extracted := ExtractCodeBlocks(md)
+	assert.Contains(t, extracted, "func Main() {}")
+	assert.Contains(t, extracted, "print('hello')")
+	assert.NotContains(t, extracted, "Here is some code:")
+}
+
 
 

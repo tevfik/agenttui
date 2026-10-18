@@ -94,6 +94,7 @@ type App struct {
 	renderedCache   string
 	cacheCount      int
 	historySave     string
+	sidebarHidden   bool
 	streamStartTime time.Time
 	streamMu        *sync.Mutex
 }
@@ -349,6 +350,72 @@ func (a *App) ResetSession() {
 		a.viewport.SetContent(a.renderMessages())
 		a.viewport.GotoTop()
 	}
+}
+
+// RewindLastTurn pops the last assistant response (and any associated tool calls)
+// and the last user prompt from the conversation history, and restores that user
+// prompt back into the input textarea so the user can easily revise and resubmit it.
+func (a *App) RewindLastTurn() (string, bool) {
+	a.mu.Lock()
+	if len(a.messages) == 0 {
+		a.mu.Unlock()
+		return "", false
+	}
+
+	// 1. Pop trailing assistant, tool, or error messages
+	for len(a.messages) > 0 {
+		last := a.messages[len(a.messages)-1]
+		if last.Role == RoleAssistant || last.Role == RoleTool || last.Role == RoleError {
+			a.messages = a.messages[:len(a.messages)-1]
+		} else {
+			break
+		}
+	}
+
+	// 2. Pop the user message and restore its text
+	var userPrompt string
+	if len(a.messages) > 0 && a.messages[len(a.messages)-1].Role == RoleUser {
+		userPrompt = a.messages[len(a.messages)-1].Content
+		a.messages = a.messages[:len(a.messages)-1]
+	}
+
+	a.cacheCount = 0
+	a.renderedCache = ""
+	ready := a.ready
+	a.mu.Unlock()
+
+	if userPrompt != "" {
+		a.textarea.SetValue(userPrompt)
+		a.textarea.CursorEnd()
+	}
+
+	if ready {
+		a.viewport.SetContent(a.renderMessages())
+		a.viewport.GotoBottom()
+	}
+
+	if userPrompt != "" {
+		a.SetNotification("⤺ Rewound turn. Prompt restored to input.", NotifyInfo)
+		return userPrompt, true
+	}
+	return "", false
+}
+
+// ToggleSidebar switches sidebar visibility on and off. When hidden, chat text
+// expands across full width, allowing clean terminal copy/selection without sidebars.
+func (a *App) ToggleSidebar() (*App, tea.Cmd) {
+	a.sidebarHidden = !a.sidebarHidden
+	a.recalcViewport()
+	status := "Sidebar visible"
+	if a.sidebarHidden {
+		status = "Sidebar hidden (clean full-width view for text selection)"
+	}
+	return a, a.SetNotification(status, NotifyInfo)
+}
+
+// IsSidebarHidden reports whether the sidebar is currently hidden.
+func (a *App) IsSidebarHidden() bool {
+	return a.sidebarHidden
 }
 
 // EmitToolStart logs a tool beginning execution in the stream.

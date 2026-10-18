@@ -130,6 +130,16 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "ctrl+t":
 			return a.toggleThinking()
 
+		case "ctrl+b":
+			return a.ToggleSidebar()
+
+		case "ctrl+z":
+			if strings.TrimSpace(a.textarea.Value()) == "" && !a.streaming && !a.waiting {
+				if _, ok := a.RewindLastTurn(); ok {
+					return a, nil
+				}
+			}
+
 		case "ctrl+m":
 			a.mouseEnabled = !a.mouseEnabled
 			status := "Mouse OFF (select text normally, scroll with PgUp/PgDn)"
@@ -882,12 +892,19 @@ func sidebarWidthFor(terminalWidth int) int {
 	return 30
 }
 
+func (a *App) sidebarWidth() int {
+	if a.sidebarHidden {
+		return 0
+	}
+	return sidebarWidthFor(a.width)
+}
+
 func (a *App) recalcViewport() {
 	if !a.ready || a.height == 0 {
 		return
 	}
 
-	sidebarW := sidebarWidthFor(a.width)
+	sidebarW := a.sidebarWidth()
 	vpW := a.width
 	if sidebarW > 0 {
 		vpW = a.width - sidebarW
@@ -916,7 +933,7 @@ func (a *App) recalcLayout() {
 		return
 	}
 
-	sidebarW := sidebarWidthFor(a.width)
+	sidebarW := a.sidebarWidth()
 	vpW := a.width
 	if sidebarW > 0 {
 		vpW = a.width - sidebarW
@@ -1801,7 +1818,7 @@ func (a *App) View() tea.View {
 		}
 
 		right := dim.Render(a.modelName)
-		sidebarW := sidebarWidthFor(a.width)
+		sidebarW := a.sidebarWidth()
 		if sidebarW == 0 && a.width >= 60 {
 			right += " " + a.renderTokenBar(8)
 		} else if a.totalTokens > 0 && sidebarW == 0 {
@@ -1879,7 +1896,7 @@ func (a *App) View() tea.View {
 			}
 			foot = " " + left + strings.Repeat(" ", gap) + right
 		} else {
-			foot = dim.Render(" Enter send · / commands · Ctrl+T thinking · Ctrl+Y copy · ↑↓ history · Ctrl+M mouse · Ctrl+C quit")
+			foot = dim.Render(" Enter send · / commands · Ctrl+T thinking · Ctrl+B sidebar · Ctrl+Y copy · ↑↓ history · Ctrl+C quit")
 		}
 		bottomLines = append(bottomLines, foot)
 	}
@@ -1893,7 +1910,7 @@ func (a *App) View() tea.View {
 		a.viewport.SetHeight(bodyH)
 	}
 
-	sidebarW := sidebarWidthFor(a.width)
+	sidebarW := a.sidebarWidth()
 	mainView := a.viewport.View()
 
 	// Viewport with vertical scrollbar (matching gleann chat)
