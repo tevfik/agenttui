@@ -467,6 +467,8 @@ func (a *App) EmitToolEnd(id, output string, success bool) {
 
 // Run launches the Bubble Tea interactive TUI.
 func (a *App) Run(ctx context.Context) error {
+	defer ResetTerminalBackground()
+	SetTerminalBackground(ThemeHex(a.cfg.Theme.BgDark))
 	p := tea.NewProgram(a)
 	a.program = p
 	_, err := p.Run()

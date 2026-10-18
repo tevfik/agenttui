@@ -110,6 +110,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return a, nil
 			}
 			a.quitting = true
+			ResetTerminalBackground()
 			return a, tea.Quit
 
 		case "esc":
@@ -984,6 +985,7 @@ func (a *App) SetTheme(t Theme) {
 	a.cfg.Theme = t
 	a.cacheCount = 0
 	a.renderedCache = ""
+	SetTerminalBackground(ThemeHex(t.BgDark))
 	if a.ready {
 		a.viewport.SetContent(a.renderMessages())
 	}
