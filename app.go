@@ -202,11 +202,25 @@ func (a *App) SetModelName(name string) {
 	a.modelName = name
 }
 
+// GetModelName returns the current active model identifier.
+func (a *App) GetModelName() string {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.modelName
+}
+
 // SetWorkDir updates the active workspace path.
 func (a *App) SetWorkDir(dir string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.workDir = dir
+}
+
+// GetWorkDir returns the active workspace path.
+func (a *App) GetWorkDir() string {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.workDir
 }
 
 // SetSidebar attaches or replaces a sidecar widget.
