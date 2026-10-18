@@ -581,3 +581,46 @@ func TestApp_ResetSession(t *testing.T) {
 	assert.Equal(t, 0, app.totalTokens, "Total tokens must be 0 after ResetSession")
 	assert.WithinDuration(t, time.Now(), app.startTime, 1*time.Second, "Session start time must be reset to now")
 }
+
+func TestApp_ThinkingCollapsibleAndToggle(t *testing.T) {
+	app := New(Config{
+		Title:       "Devran",
+		EnableMouse: true,
+	})
+	app.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+	app.initDone = true
+
+	// Add assistant message with thinking tags
+	msgContent := "<think>\nAnalyzing the requested algorithm and checking edge cases.\n</think>\nHere is the solution."
+	app.AddMessage(Message{
+		Role: RoleAssistant,
+		Content: msgContent,
+	})
+
+	assert.Len(t, app.messages, 1)
+	m := app.messages[0]
+	assert.Equal(t, "Here is the solution.", m.Content)
+	assert.Contains(t, m.Thinking, "Analyzing the requested algorithm")
+	assert.False(t, m.ThinkingOpen, "Thinking should be collapsed by default")
+
+	// Verify collapsed view
+	rendered := app.renderMessages()
+	assert.Contains(t, rendered, "Thought")
+	assert.Contains(t, rendered, "[click or Ctrl+T to expand]")
+	assert.NotContains(t, rendered, "Analyzing the requested algorithm", "Collapsed thinking content should not be visible")
+
+	// Trigger toggle via Ctrl+T
+	app.Update(tea.KeyPressMsg{Code: 't', Mod: tea.ModCtrl})
+	assert.True(t, app.messages[0].ThinkingOpen, "Thinking should now be open")
+
+	// Verify expanded view
+	renderedExpanded := app.renderMessages()
+	assert.Contains(t, renderedExpanded, "Thought")
+	assert.Contains(t, renderedExpanded, "[click or Ctrl+T to collapse]")
+	assert.Contains(t, renderedExpanded, "Analyzing the requested algorithm", "Expanded thinking content must be visible")
+
+	// Trigger toggle again to collapse
+	app.Update(tea.KeyPressMsg{Code: 't', Mod: tea.ModCtrl})
+	assert.False(t, app.messages[0].ThinkingOpen, "Thinking should now be collapsed again")
+}
+

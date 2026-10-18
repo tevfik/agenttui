@@ -77,6 +77,9 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !a.mouseEnabled {
 			return a, nil
 		}
+		if click, ok := msg.(tea.MouseClickMsg); ok && click.Button == tea.MouseLeft && a.hasThinkingMessages() {
+			return a.toggleThinking()
+		}
 		var vcmd tea.Cmd
 		a.viewport, vcmd = a.viewport.Update(msg)
 		return a, vcmd
@@ -117,6 +120,9 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return a, nil
 			}
 			return a, nil
+
+		case "ctrl+t":
+			return a.toggleThinking()
 
 		case "ctrl+m":
 			a.mouseEnabled = !a.mouseEnabled
@@ -313,7 +319,8 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		if msg.err != nil {
 			if finalContent != "" {
-				a.AddMessage(Message{Role: RoleAssistant, Content: finalContent})
+				thinking, clean := extractThinkingTags(finalContent)
+				a.AddMessage(Message{Role: RoleAssistant, Content: clean, Thinking: thinking, ThinkingTime: responseTime})
 			}
 			a.AddMessage(Message{Role: RoleError, Content: msg.err.Error()})
 			cmds = append(cmds, a.SetNotification(fmt.Sprintf("× Error after %s", responseTime), NotifyError))
@@ -321,7 +328,17 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if finalContent == "" {
 				finalContent = "_No response._"
 			}
-			a.AddMessage(Message{Role: RoleAssistant, Content: finalContent})
+			thinking, clean := extractThinkingTags(finalContent)
+			if clean == "" && thinking != "" {
+				clean = thinking
+				thinking = ""
+			}
+			a.AddMessage(Message{
+				Role:         RoleAssistant,
+				Content:      clean,
+				Thinking:     thinking,
+				ThinkingTime: responseTime,
+			})
 			cmds = append(cmds, a.SetNotification(fmt.Sprintf("◇ %s · %s · %dtok", a.modelName, responseTime, msg.tokens), NotifyInfo))
 		}
 
@@ -1116,7 +1133,36 @@ func (a *App) renderStreamingTail() string {
 	asstTag := lipgloss.NewStyle().Bold(true).Foreground(a.cfg.Theme.Primary).Render("◈ " + a.cfg.Title)
 	var sb strings.Builder
 	sb.WriteString(asstTag + "\n\n")
-	sb.WriteString(a.renderMarkdown(partial))
+
+	thinking, content := extractThinkingTags(partial)
+	if strings.Contains(partial, "<think>") && !strings.Contains(partial, "</think>") {
+		sb.WriteString(lipgloss.NewStyle().Foreground(a.cfg.Theme.Accent).Bold(true).Render("▼ Thinking…") + " " + a.spinner.View() + "\n\n")
+		cardWidth := a.viewport.Width() - 6
+		if cardWidth < 40 {
+			cardWidth = 40
+		}
+		bodyStyle := lipgloss.NewStyle().
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(a.cfg.Theme.Border).
+			Padding(0, 1).
+			Foreground(a.cfg.Theme.Muted).
+			Italic(true).
+			Width(cardWidth)
+		sb.WriteString(bodyStyle.Render(thinking))
+		sb.WriteString("\n\n")
+		return sb.String()
+	}
+
+	if thinking != "" {
+		tagStyle := lipgloss.NewStyle().Foreground(a.cfg.Theme.Accent).Bold(true)
+		headerStyle := lipgloss.NewStyle().Foreground(a.cfg.Theme.SubText).Italic(true)
+		hintStyle := lipgloss.NewStyle().Foreground(a.cfg.Theme.Muted)
+		sb.WriteString(headerStyle.Render(fmt.Sprintf("%s Thought ", tagStyle.Render("▶"))) + hintStyle.Render("[click or Ctrl+T to expand]") + "\n\n")
+	}
+
+	if strings.TrimSpace(content) != "" {
+		sb.WriteString(a.renderMarkdown(content))
+	}
 	sb.WriteString(" " + a.spinner.View() + "\n\n")
 	return sb.String()
 }
@@ -1135,12 +1181,25 @@ func (a *App) renderHistoryBlock() string {
 			sb.WriteString("\n\n")
 
 		case RoleAssistant:
-			if strings.TrimSpace(m.Content) != "" {
+			thinking := m.Thinking
+			content := m.Content
+			if thinking == "" && strings.Contains(content, "<think>") {
+				thinking, content = extractThinkingTags(content)
+			}
+			if strings.TrimSpace(content) != "" || strings.TrimSpace(thinking) != "" {
 				asstTag := lipgloss.NewStyle().Bold(true).Foreground(a.cfg.Theme.Primary).Render("◈ " + a.cfg.Title)
 				tsTag := lipgloss.NewStyle().Foreground(a.cfg.Theme.Muted).Render(" · " + m.Timestamp.Format("15:04"))
 				sb.WriteString(asstTag + tsTag + "\n\n")
-				sb.WriteString(a.renderMarkdown(m.Content))
-				sb.WriteString("\n\n")
+
+				if strings.TrimSpace(thinking) != "" {
+					sb.WriteString(a.renderThinkingCard(thinking, m.ThinkingOpen, m.ThinkingTime))
+					sb.WriteString("\n\n")
+				}
+
+				if strings.TrimSpace(content) != "" {
+					sb.WriteString(a.renderMarkdown(content))
+					sb.WriteString("\n\n")
+				}
 			}
 
 		case RoleTool:
@@ -1211,6 +1270,109 @@ func (a *App) renderErrorCard(content string, ts time.Time) string {
 	tsStyle := lipgloss.NewStyle().Foreground(a.cfg.Theme.Muted)
 	header := errStyle.Render("✗ Error") + tsStyle.Render(" · "+ts.Format("15:04"))
 	return header + "\n" + errStyle.Render(content)
+}
+
+func (a *App) renderThinkingCard(thinking string, open bool, duration time.Duration) string {
+	thinking = strings.TrimSpace(thinking)
+	if thinking == "" {
+		return ""
+	}
+
+	timeStr := ""
+	if duration > 0 {
+		timeStr = fmt.Sprintf(" (%s)", duration.Round(100*time.Millisecond))
+	}
+
+	tagStyle := lipgloss.NewStyle().Foreground(a.cfg.Theme.Accent).Bold(true)
+	headerStyle := lipgloss.NewStyle().Foreground(a.cfg.Theme.SubText).Italic(true)
+	hintStyle := lipgloss.NewStyle().Foreground(a.cfg.Theme.Muted)
+
+	if !open {
+		return headerStyle.Render(fmt.Sprintf("%s Thought%s ", tagStyle.Render("▶"), timeStr)) +
+			hintStyle.Render("[click or Ctrl+T to expand]")
+	}
+
+	header := headerStyle.Render(fmt.Sprintf("%s Thought%s ", tagStyle.Render("▼"), timeStr)) +
+		hintStyle.Render("[click or Ctrl+T to collapse]")
+
+	cardWidth := a.viewport.Width() - 6
+	if cardWidth < 40 {
+		cardWidth = 40
+	}
+
+	bodyStyle := lipgloss.NewStyle().
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(a.cfg.Theme.Border).
+		Padding(0, 1).
+		Foreground(a.cfg.Theme.Muted).
+		Italic(true).
+		Width(cardWidth)
+
+	return header + "\n" + bodyStyle.Render(thinking)
+}
+
+func extractThinkingTags(raw string) (string, string) {
+	startTag := "<think>"
+	endTag := "</think>"
+	startIdx := strings.Index(raw, startTag)
+	if startIdx == -1 {
+		return "", raw
+	}
+	endIdx := strings.Index(raw, endTag)
+	if endIdx == -1 {
+		return strings.TrimSpace(raw[startIdx+len(startTag):]), strings.TrimSpace(raw[:startIdx])
+	}
+	thinking := strings.TrimSpace(raw[startIdx+len(startTag) : endIdx])
+	content := strings.TrimSpace(raw[:startIdx] + raw[endIdx+len(endTag):])
+	return thinking, content
+}
+
+func (a *App) hasThinkingMessages() bool {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	for _, m := range a.messages {
+		if m.Thinking != "" || strings.Contains(m.Content, "<think>") {
+			return true
+		}
+	}
+	return false
+}
+
+func (a *App) toggleThinking() (*App, tea.Cmd) {
+	a.mu.Lock()
+	anyOpen := false
+	hasThinking := false
+	for _, m := range a.messages {
+		if m.Thinking != "" || strings.Contains(m.Content, "<think>") {
+			hasThinking = true
+			if m.ThinkingOpen {
+				anyOpen = true
+			}
+		}
+	}
+	if !hasThinking {
+		a.mu.Unlock()
+		return a, nil
+	}
+
+	newOpen := !anyOpen
+	count := 0
+	for i := range a.messages {
+		if a.messages[i].Thinking != "" || strings.Contains(a.messages[i].Content, "<think>") {
+			a.messages[i].ThinkingOpen = newOpen
+			count++
+		}
+	}
+	a.cacheCount = 0
+	a.renderedCache = ""
+	a.mu.Unlock()
+
+	a.viewport.SetContent(a.renderMessages())
+	status := "Thinking hidden"
+	if newOpen {
+		status = fmt.Sprintf("Thinking expanded (%d message(s))", count)
+	}
+	return a, a.SetNotification(status, NotifyInfo)
 }
 
 func (a *App) renderToolCard(t *ToolCall) string {
@@ -1591,7 +1753,7 @@ func (a *App) View() tea.View {
 			}
 			foot = " " + left + strings.Repeat(" ", gap) + right
 		} else {
-			foot = dim.Render(" Enter send · / commands · Ctrl+Y copy · ↑↓ history · Ctrl+M mouse · Ctrl+C quit")
+			foot = dim.Render(" Enter send · / commands · Ctrl+T thinking · Ctrl+Y copy · ↑↓ history · Ctrl+M mouse · Ctrl+C quit")
 		}
 		bottomLines = append(bottomLines, foot)
 	}

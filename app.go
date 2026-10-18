@@ -301,6 +301,13 @@ func (a *App) AddMessage(msg Message) {
 	if msg.Timestamp.IsZero() {
 		msg.Timestamp = time.Now()
 	}
+	if msg.Thinking == "" && strings.Contains(msg.Content, "<think>") {
+		think, clean := extractThinkingTags(msg.Content)
+		if think != "" {
+			msg.Thinking = think
+			msg.Content = clean
+		}
+	}
 	a.messages = append(a.messages, msg)
 	a.cacheCount = 0
 	a.renderedCache = ""

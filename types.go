@@ -40,11 +40,14 @@ type ToolCall struct {
 
 // Message represents a message in the conversation.
 type Message struct {
-	Role      Role      `json:"role"`
-	Content   string    `json:"content"`
-	Timestamp time.Time `json:"timestamp"`
-	Tokens    int       `json:"tokens,omitempty"`
-	Tool      *ToolCall `json:"tool,omitempty"`
+	Role         Role          `json:"role"`
+	Content      string        `json:"content"`
+	Thinking     string        `json:"thinking,omitempty"`
+	ThinkingOpen bool          `json:"thinking_open,omitempty"`
+	ThinkingTime time.Duration `json:"thinking_time,omitempty"`
+	Timestamp    time.Time     `json:"timestamp"`
+	Tokens       int           `json:"tokens,omitempty"`
+	Tool         *ToolCall     `json:"tool,omitempty"`
 }
 
 // StreamHandler is a streaming function called when the user sends a prompt.
