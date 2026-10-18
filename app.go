@@ -297,7 +297,6 @@ func (a *App) AddChangedFile(file string) {
 // AddMessage appends a message to the conversation.
 func (a *App) AddMessage(msg Message) {
 	a.mu.Lock()
-	defer a.mu.Unlock()
 	if msg.Timestamp.IsZero() {
 		msg.Timestamp = time.Now()
 	}
@@ -311,6 +310,12 @@ func (a *App) AddMessage(msg Message) {
 	a.messages = append(a.messages, msg)
 	a.cacheCount = 0
 	a.renderedCache = ""
+	ready := a.ready
+	a.mu.Unlock()
+
+	if ready {
+		a.viewport.SetContent(a.renderMessages())
+	}
 }
 
 // ClearMessages removes all messages from the conversation transcript.

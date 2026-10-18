@@ -77,12 +77,18 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if !a.mouseEnabled {
 			return a, nil
 		}
-		if click, ok := msg.(tea.MouseClickMsg); ok && click.Button == tea.MouseLeft && a.hasThinkingMessages() {
-			return a.toggleThinking()
+		if click, ok := msg.(tea.MouseClickMsg); ok && click.Button == tea.MouseLeft {
+			if targetIdx := a.findThinkingMessageAt(click); targetIdx >= 0 {
+				return a.toggleThinkingMessage(targetIdx)
+			}
 		}
 		var vcmd tea.Cmd
 		a.viewport, vcmd = a.viewport.Update(msg)
-		return a, vcmd
+		var taCmd tea.Cmd
+		if a.initDone {
+			a.textarea, taCmd = a.textarea.Update(msg)
+		}
+		return a, tea.Batch(vcmd, taCmd)
 
 	case tea.KeyPressMsg:
 		keyStr := msg.String()
@@ -1336,6 +1342,126 @@ func (a *App) hasThinkingMessages() bool {
 		}
 	}
 	return false
+}
+
+func (a *App) findThinkingMessageAt(click tea.MouseClickMsg) int {
+	headerH := 0
+	if a.cfg.ShowHeader {
+		headerH = 2
+	}
+	// Clicks above the viewport (header) or below the viewport (textarea, chat input, footer) never toggle thinking!
+	if click.Y < headerH || click.Y >= headerH+a.viewport.Height() {
+		return -1
+	}
+	viewRow := click.Y - headerH
+	lineIdx := a.viewport.YOffset() + viewRow
+	content := a.viewport.GetContent()
+	if content == "" {
+		return -1
+	}
+	lines := strings.Split(content, "\n")
+	if lineIdx < 0 || lineIdx >= len(lines) {
+		return -1
+	}
+	targetLine := lines[lineIdx]
+
+	// Check if this line is a Thought banner or the top border of an open thought card
+	isBanner := strings.Contains(targetLine, "Thought") &&
+		(strings.Contains(targetLine, "▶") || strings.Contains(targetLine, "▼") ||
+			strings.Contains(targetLine, "expand") || strings.Contains(targetLine, "collapse") ||
+			strings.Contains(targetLine, "Ctrl+T"))
+
+	isTopBorder := false
+	if !isBanner && lineIdx > 0 && strings.Contains(targetLine, "╭") {
+		prevLine := lines[lineIdx-1]
+		if strings.Contains(prevLine, "Thought") && (strings.Contains(prevLine, "▼") || strings.Contains(prevLine, "collapse")) {
+			isTopBorder = true
+		}
+	}
+
+	if !isBanner && !isTopBorder {
+		return -1
+	}
+
+	// It is a click on a Thought banner! Determine which message index was clicked.
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+
+	currentLine := 0
+	for i, m := range a.messages {
+		var msgStr string
+		switch m.Role {
+		case RoleUser:
+			msgStr = a.renderUserCard(m.Content, m.Timestamp) + "\n\n"
+		case RoleAssistant:
+			thinking := m.Thinking
+			content := m.Content
+			if thinking == "" && strings.Contains(content, "<think>") {
+				thinking, content = extractThinkingTags(content)
+			}
+			var asstSb strings.Builder
+			if strings.TrimSpace(content) != "" || strings.TrimSpace(thinking) != "" {
+				asstTag := lipgloss.NewStyle().Bold(true).Foreground(a.cfg.Theme.Primary).Render("◈ " + a.cfg.Title)
+				tsTag := lipgloss.NewStyle().Foreground(a.cfg.Theme.Muted).Render(" · " + m.Timestamp.Format("15:04"))
+				asstSb.WriteString(asstTag + tsTag + "\n\n")
+				if strings.TrimSpace(thinking) != "" {
+					asstSb.WriteString(a.renderThinkingCard(thinking, m.ThinkingOpen, m.ThinkingTime))
+					asstSb.WriteString("\n\n")
+				}
+				if strings.TrimSpace(content) != "" {
+					asstSb.WriteString(a.renderMarkdown(content))
+					asstSb.WriteString("\n\n")
+				}
+			}
+			msgStr = asstSb.String()
+		case RoleTool:
+			if m.Tool != nil {
+				msgStr = a.renderToolCard(m.Tool) + "\n\n"
+			}
+		case RoleSystem:
+			msgStr = a.renderMarkdown(m.Content) + "\n\n"
+		case RoleError:
+			msgStr = a.renderErrorCard(m.Content, m.Timestamp) + "\n\n"
+		}
+
+		msgLines := strings.Count(msgStr, "\n")
+		if lineIdx >= currentLine && lineIdx <= currentLine+msgLines {
+			if m.Thinking != "" || strings.Contains(m.Content, "<think>") {
+				return i
+			}
+		}
+		currentLine += msgLines
+	}
+
+	// Fallback to the latest message with thinking
+	for idx := len(a.messages) - 1; idx >= 0; idx-- {
+		m := a.messages[idx]
+		if m.Thinking != "" || strings.Contains(m.Content, "<think>") {
+			return idx
+		}
+	}
+
+	return -1
+}
+
+func (a *App) toggleThinkingMessage(idx int) (*App, tea.Cmd) {
+	a.mu.Lock()
+	if idx < 0 || idx >= len(a.messages) {
+		a.mu.Unlock()
+		return a, nil
+	}
+	a.messages[idx].ThinkingOpen = !a.messages[idx].ThinkingOpen
+	isOpen := a.messages[idx].ThinkingOpen
+	a.cacheCount = 0
+	a.renderedCache = ""
+	a.mu.Unlock()
+
+	a.viewport.SetContent(a.renderMessages())
+	status := "Thinking hidden"
+	if isOpen {
+		status = "Thinking expanded"
+	}
+	return a, a.SetNotification(status, NotifyInfo)
 }
 
 func (a *App) toggleThinking() (*App, tea.Cmd) {

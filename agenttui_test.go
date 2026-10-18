@@ -624,3 +624,65 @@ func TestApp_ThinkingCollapsibleAndToggle(t *testing.T) {
 	assert.False(t, app.messages[0].ThinkingOpen, "Thinking should now be collapsed again")
 }
 
+func TestApp_MouseClickChatInputDoesNotToggleThinking(t *testing.T) {
+	app := New(Config{
+		Title:       "TestApp",
+		ShowHeader:  true,
+		EnableMouse: true,
+	})
+	app.Update(tea.WindowSizeMsg{Width: 100, Height: 40})
+	app.initDone = true
+
+	// Add assistant message with thinking
+	app.AddMessage(Message{
+		Role:    RoleAssistant,
+		Content: "<think>\nInternal reasoning.\n</think>\nActual response.",
+	})
+	assert.False(t, app.messages[0].ThinkingOpen, "Thinking should start collapsed")
+
+	// 1. Click on the chat input area at bottom (e.g. Y=36 where viewport height is ~31)
+	chatInputClick := tea.MouseClickMsg{
+		X:      10,
+		Y:      36,
+		Button: tea.MouseLeft,
+	}
+	app.Update(chatInputClick)
+	assert.False(t, app.messages[0].ThinkingOpen, "Clicking chat input at bottom must NOT toggle thinking open")
+
+	// 2. Click on normal user text or empty viewport space (e.g. Y=2)
+	headerClick := tea.MouseClickMsg{
+		X:      10,
+		Y:      0, // Header
+		Button: tea.MouseLeft,
+	}
+	app.Update(headerClick)
+	assert.False(t, app.messages[0].ThinkingOpen, "Clicking header must NOT toggle thinking")
+
+	// 3. Find the thinking line in viewport content to click directly on it
+	content := app.viewport.GetContent()
+	lines := strings.Split(content, "\n")
+	thoughtLineIdx := -1
+	for idx, line := range lines {
+		if strings.Contains(line, "Thought") && strings.Contains(line, "expand") {
+			thoughtLineIdx = idx
+			break
+		}
+	}
+	assert.GreaterOrEqual(t, thoughtLineIdx, 0, "Thought banner should be found in viewport")
+
+	// Header height is 2, so Y in terminal = 2 + (thoughtLineIdx - YOffset)
+	clickY := 2 + (thoughtLineIdx - app.viewport.YOffset())
+	bannerClick := tea.MouseClickMsg{
+		X:      5,
+		Y:      clickY,
+		Button: tea.MouseLeft,
+	}
+	app.Update(bannerClick)
+	assert.True(t, app.messages[0].ThinkingOpen, "Clicking specifically on the Thought banner MUST open thinking")
+
+	// Click it again to collapse
+	app.Update(bannerClick)
+	assert.False(t, app.messages[0].ThinkingOpen, "Clicking specifically on the Thought banner again MUST collapse thinking")
+}
+
+
