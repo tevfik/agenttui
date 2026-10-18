@@ -746,6 +746,7 @@ func TestApp_ThemesListAndSwitch(t *testing.T) {
 	themes := AvailableThemes()
 	assert.Contains(t, themes, "claude")
 	assert.Contains(t, themes, "devran")
+	assert.Contains(t, themes, "opencode")
 	assert.Contains(t, themes, "catppuccin")
 	assert.Contains(t, themes, "tokyo-night")
 	assert.Contains(t, themes, "dracula")
@@ -759,7 +760,15 @@ func TestApp_ThemesListAndSwitch(t *testing.T) {
 		assert.NotNil(t, th.Border)
 	}
 
+	// Verify OpenCode alias and specific tokens
+	openCode := ThemeByName("opencode")
+	assert.Equal(t, "opencode", openCode.Name)
+	assert.Equal(t, "opencode", ThemeByName("open-code").Name)
+	assert.Equal(t, "opencode", ThemeByName("orange").Name)
+
 	app := New(Config{})
+	app.SetTheme(OpenCodeTheme())
+	assert.Equal(t, "opencode", app.GetTheme().Name)
 	app.SetTheme(CatppuccinTheme())
 	assert.Equal(t, "catppuccin", app.GetTheme().Name)
 }

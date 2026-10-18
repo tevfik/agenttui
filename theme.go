@@ -236,11 +236,31 @@ func GruvboxTheme() Theme {
 	)
 }
 
+// OpenCodeTheme returns the signature OpenCode minimalist pitch black, crisp white, vibrant orange, and zinc gray aesthetic.
+func OpenCodeTheme() Theme {
+	return newTheme(
+		"opencode",
+		lipgloss.Color("#FF6A00"), // OpenCode Vibrant Orange
+		lipgloss.Color("#FB923C"), // Warm Amber Orange
+		lipgloss.Color("#EA580C"), // Deep Orange Accent
+		lipgloss.Color("#22C55E"), // Emerald Green
+		lipgloss.Color("#EAB308"), // Vivid Amber Yellow
+		lipgloss.Color("#EF4444"), // Crimson Red
+		lipgloss.Color("#38BDF8"), // Electric Cyan
+		lipgloss.Color("#FFFFFF"), // Crisp Pure White Text
+		lipgloss.Color("#D4D4D8"), // Zinc 300 Light Gray
+		lipgloss.Color("#71717A"), // Zinc 500 Medium Gray
+		lipgloss.Color("#27272A"), // Zinc 800 Dark Border
+		lipgloss.Color("#000000"), // Pitch Black Background
+	)
+}
+
 // AvailableThemes returns the identifiers of all built-in themes.
 func AvailableThemes() []string {
 	return []string{
 		"claude",
 		"devran",
+		"opencode",
 		"catppuccin",
 		"tokyo-night",
 		"dracula",
@@ -257,6 +277,8 @@ func DefaultTheme() Theme {
 // ThemeByName returns the matching theme by name, defaulting to Claude.
 func ThemeByName(name string) Theme {
 	switch name {
+	case "opencode", "open-code", "orange":
+		return OpenCodeTheme()
 	case "devran", "violet":
 		return DevranTheme()
 	case "catppuccin", "mocha":
