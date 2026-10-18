@@ -9,6 +9,7 @@ import (
 	"time"
 
 	tea "charm.land/bubbletea/v2"
+	"github.com/charmbracelet/x/ansi"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -490,6 +491,61 @@ func TestApp_Scrollbar(t *testing.T) {
 	sb := app.renderScrollbar(20)
 	assert.NotEmpty(t, sb)
 	assert.Contains(t, sb, "▓", "Scrollbar should render thumb ▓ when totalLines > visibleLines")
+}
+
+func TestApp_Scrollbar_WideLinesDoNotBreakAlignment(t *testing.T) {
+	app := New(Config{
+		Theme: DefaultTheme(),
+	})
+	app.Update(tea.WindowSizeMsg{Width: 100, Height: 30})
+
+	// Add a message with a very wide table and emojis that exceed viewport width
+	wideContent := "### Sorularınız için örnekler:\n\n" +
+		"| Kategori | Örnek İstekler |\n" +
+		"|---|---|\n" +
+		"| 🔧 Web Geliştirme | API endpoint'i oluşturmak mı yoksa frontend sayfası yapmak ister misiniz? |\n" +
+		"| 💾 Veritabanı | SQL sorgusu mu, model tasarımı mı gerekiyor? |\n" +
+		"| ⚙️ Sistem Programlaması | C/C++ projeleri mi, Python scriptleri mi istersiniz? Çok uzun metinler satırı taşırabilir. |\n" +
+		"| 📱 Mobil Uygulama | Android/iOS geliştirme ile ilgili yardım lazım mı? |\n"
+
+	app.AddMessage(Message{
+		Role:    RoleAssistant,
+		Content: wideContent,
+	})
+
+	view := app.View().Content
+	lines := strings.Split(view, "\n")
+	assert.NotEmpty(t, lines)
+
+	// Viewport width is 100 - 24 (sidebar) - 1 = 75.
+	// In the viewport rows (before the input box / footer), the scrollbar should be at visual column 75.
+	targetCol := 75
+
+	checkedCount := 0
+	for r, l := range lines {
+		// Stop when reaching the input box frame
+		if strings.Contains(l, "╭") || strings.Contains(l, "Type a message") {
+			break
+		}
+		// Skip header rows (before viewport content)
+		if strings.Contains(l, "Devran") || strings.Contains(l, "─") {
+			continue
+		}
+
+		prefix := ansi.Truncate(l, targetCol, "")
+		if ansi.StringWidth(prefix) != targetCol {
+			continue
+		}
+		remaining := ansi.Cut(l, targetCol, targetCol+1)
+		stripped := ansi.Strip(remaining)
+		firstChar := ""
+		if len(stripped) > 0 {
+			firstChar = string([]rune(stripped)[0])
+		}
+		assert.Contains(t, []string{"│", "▓"}, firstChar, "Character at scrollbar column %d must be scrollbar glyph in row %d: %q", targetCol, r, l)
+		checkedCount++
+	}
+	assert.True(t, checkedCount > 5, "Expected to verify multiple viewport body rows, checked: %d", checkedCount)
 }
 
 func TestApp_HeaderNoDuplicateTokenBar(t *testing.T) {

@@ -17,6 +17,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/glamour"
+	"github.com/charmbracelet/x/ansi"
 )
 
 type initDoneMsg struct{}
@@ -1118,25 +1119,31 @@ func (a *App) renderMarkdown(content string) string {
 		return ""
 	}
 
-	renderer := a.renderer
-	if renderer == nil {
-		vpW := a.width
-		if vpW < 40 {
-			vpW = 80
-		}
+	vpW := a.viewport.Width()
+	if vpW <= 0 {
+		vpW = a.width - a.sidebarWidth()
+	}
+	if vpW < 40 {
+		vpW = 40
+	}
+	wrapW := vpW - 4
+	if wrapW < 36 {
+		wrapW = 36
+	}
+
+	if a.renderer == nil || a.renderW != wrapW {
 		r, err := glamour.NewTermRenderer(
 			glamour.WithStandardStyle("dark"),
-			glamour.WithWordWrap(vpW-6),
+			glamour.WithWordWrap(wrapW),
 		)
 		if err == nil {
 			a.renderer = r
-			a.renderW = vpW
-			renderer = r
+			a.renderW = wrapW
 		}
 	}
 
-	if renderer != nil {
-		rendered, err := renderer.Render(content)
+	if a.renderer != nil {
+		rendered, err := a.renderer.Render(content)
 		if err == nil {
 			return strings.TrimRight(rendered, "\n")
 		}
@@ -1921,11 +1928,26 @@ func (a *App) View() tea.View {
 		sbLines = append(sbLines, "│")
 	}
 
+	targetW := a.viewport.Width()
+	if targetW <= 0 {
+		targetW = a.width - sidebarW - 1
+	}
+	if targetW < 10 {
+		targetW = 10
+	}
 	var vpWithScroll strings.Builder
 	for i, line := range vpLines {
 		sb := ""
 		if i < len(sbLines) {
 			sb = sbLines[i]
+		}
+		curW := ansi.StringWidth(line)
+		if curW > targetW {
+			line = ansi.Truncate(line, targetW, "")
+			curW = ansi.StringWidth(line)
+		}
+		if curW < targetW {
+			line += strings.Repeat(" ", targetW-curW)
 		}
 		vpWithScroll.WriteString(line + sb + "\n")
 	}
