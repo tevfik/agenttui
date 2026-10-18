@@ -469,6 +469,17 @@ func (a *App) handleSubmit(input string) tea.Cmd {
 						err:     err,
 					}
 				})
+			} else {
+				a.AddMessage(Message{Role: RoleUser, Content: input})
+				a.AddMessage(Message{
+					Role:      RoleSystem,
+					Content:   fmt.Sprintf("❌ Unknown slash command `/%s`. Type `/` to see available commands.", name),
+					Timestamp: time.Now(),
+				})
+				a.cacheCount = 0
+				a.viewport.SetContent(a.renderMessages())
+				a.viewport.GotoBottom()
+				return nil
 			}
 		}
 	}
