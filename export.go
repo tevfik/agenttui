@@ -59,6 +59,13 @@ func (a *App) ExportSession(outDir, baseName string) (mdPath, htmlPath string, e
 			}
 			md.WriteString(m.Content)
 			md.WriteString("\n\n")
+			if len(m.Sources) > 0 {
+				md.WriteString("**Sources**\n\n")
+				for i, s := range m.Sources {
+					md.WriteString(fmt.Sprintf("%d. %s\n", i+1, sourceLabel(s)))
+				}
+				md.WriteString("\n")
+			}
 		case RoleTool:
 			if m.Tool != nil {
 				md.WriteString(fmt.Sprintf("> **Tool:** `%s(%s)`\n>\n", m.Tool.Name, m.Tool.Args))
@@ -157,9 +164,9 @@ func (a *App) ExportSession(outDir, baseName string) (mdPath, htmlPath string, e
 			h.WriteString(fmt.Sprintf(`<div class="turn assistant">
   <div class="turn-header"><span class="turn-title">◈ %s</span><span class="time">%s</span></div>
   %s
-  <div class="content">%s</div>
+  <div class="content">%s</div>%s
 </div>
-`, html.EscapeString(title), m.Timestamp.Format("15:04"), thinkingHTML, html.EscapeString(m.Content)))
+`, html.EscapeString(title), m.Timestamp.Format("15:04"), thinkingHTML, html.EscapeString(m.Content), sourcesHTML(m.Sources)))
 
 		case RoleTool:
 			if m.Tool != nil {
@@ -182,4 +189,17 @@ func (a *App) ExportSession(outDir, baseName string) (mdPath, htmlPath string, e
 	}
 
 	return mdPath, htmlPath, nil
+}
+
+func sourcesHTML(srcs []Source) string {
+	if len(srcs) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("\n  <ol class=\"sources\">")
+	for _, s := range srcs {
+		b.WriteString("<li>" + html.EscapeString(sourceLabel(s)) + "</li>")
+	}
+	b.WriteString("</ol>")
+	return b.String()
 }

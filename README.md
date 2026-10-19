@@ -22,6 +22,7 @@ A modern, responsive, and extensible Terminal User Interface (TUI) engine built 
 
 - ❓ **Ask / Approval Prompts:** `app.Ask(ctx, agenttui.Question{...})` blocks a handler until the user picks an option or types an answer.
 - 🧩 **Typed Event Stream:** `Config.StreamEvents` reports text, thinking and tool start/end as separate events (no `<think>` tag parsing).
+- 📚 **Sources / citations:** `EventSources` attaches `[]Source` (title, location, score) to the answer; rendered under it and included in `/export`.
 - 💾 **Session Store & Retry:** optional `Config.Store` (Load/Save) for resume; `/retry` regenerates the last answer.
 
 ---

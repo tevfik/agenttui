@@ -47,6 +47,7 @@ type Message struct {
 	ThinkingTime time.Duration `json:"thinking_time,omitempty"`
 	Timestamp    time.Time     `json:"timestamp"`
 	Tokens       int           `json:"tokens,omitempty"`
+	Sources      []Source      `json:"sources,omitempty"`
 	Tool         *ToolCall     `json:"tool,omitempty"`
 }
 
@@ -62,7 +63,15 @@ const (
 	EventThinking                   // Text: a chunk of reasoning
 	EventToolStart                  // ToolID, ToolName, ToolArgs
 	EventToolEnd                    // ToolID, ToolOutput, ToolOK
+	EventSources                    // Sources: passages the answer is grounded in; attached to the assistant message of this turn
 )
+
+// Source is one passage or document an answer is grounded in (RAG citation).
+type Source struct {
+	Title    string  `json:"title"`
+	Location string  `json:"location,omitempty"` // path, URL or line range
+	Score    float64 `json:"score,omitempty"`    // 0 hides the score
+}
 
 // Event is one typed item of an agent response stream.
 type Event struct {
@@ -73,6 +82,7 @@ type Event struct {
 	ToolArgs   string
 	ToolOutput string
 	ToolOK     bool
+	Sources    []Source
 }
 
 // EventStreamHandler is the typed alternative to StreamHandler. Reasoning and

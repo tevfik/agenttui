@@ -63,10 +63,11 @@ type App struct {
 	streaming bool
 
 	// Stream channel
-	streamBuf    *strings.Builder
-	streamCh     chan tea.Msg
-	streamCtx    context.Context
-	streamCancel context.CancelFunc
+	streamBuf      *strings.Builder
+	pendingSources []Source // citations emitted during the current turn
+	streamCh       chan tea.Msg
+	streamCtx      context.Context
+	streamCancel   context.CancelFunc
 
 	// Context window tracking
 	contextUsed int

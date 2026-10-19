@@ -378,6 +378,8 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.EmitToolStart(msg.ev.ToolID, msg.ev.ToolName, msg.ev.ToolArgs)
 		case EventToolEnd:
 			a.EmitToolEnd(msg.ev.ToolID, msg.ev.ToolOutput, msg.ev.ToolOK)
+		case EventSources:
+			a.pendingSources = append(a.pendingSources, msg.ev.Sources...)
 		}
 		a.cacheCount = 0
 		a.viewport.SetContent(a.renderMessages())
@@ -395,13 +397,14 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		a.streaming = false
 		a.waiting = false
+		defer func() { a.pendingSources = nil }()
 		a.totalTokens += msg.tokens
 		responseTime := time.Since(a.streamStartTime).Truncate(100 * time.Millisecond)
 
 		if msg.err != nil {
 			if finalContent != "" {
 				thinking, clean := extractThinkingTags(finalContent)
-				a.AddMessage(Message{Role: RoleAssistant, Content: clean, Thinking: thinking, ThinkingTime: responseTime})
+				a.AddMessage(Message{Role: RoleAssistant, Content: clean, Thinking: thinking, ThinkingTime: responseTime, Sources: a.pendingSources})
 			}
 			a.AddMessage(Message{Role: RoleError, Content: msg.err.Error()})
 			cmds = append(cmds, a.SetNotification(fmt.Sprintf("× Error after %s", responseTime), NotifyError))
@@ -419,6 +422,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				Content:      clean,
 				Thinking:     thinking,
 				ThinkingTime: responseTime,
+				Sources:      a.pendingSources,
 			})
 			cmds = append(cmds, a.SetNotification(fmt.Sprintf("◇ %s · %s · %dtok", a.modelName, responseTime, msg.tokens), NotifyInfo))
 		}
@@ -728,6 +732,7 @@ func (a *App) startStreamPrompt(prompt string) tea.Cmd {
 	}
 
 	a.streaming = true
+	a.pendingSources = nil
 	a.waiting = false
 	a.streamStartTime = time.Now()
 	a.streamMu.Lock()
@@ -1382,6 +1387,7 @@ func (a *App) renderHistoryBlock() string {
 					sb.WriteString(a.renderMarkdown(content))
 					sb.WriteString("\n\n")
 				}
+				sb.WriteString(a.renderSources(m.Sources))
 			}
 
 		case RoleTool:
@@ -1588,6 +1594,7 @@ func (a *App) findThinkingMessageAt(click tea.MouseClickMsg) int {
 					asstSb.WriteString(a.renderMarkdown(content))
 					asstSb.WriteString("\n\n")
 				}
+				asstSb.WriteString(a.renderSources(m.Sources))
 			}
 			msgStr = asstSb.String()
 		case RoleTool:
@@ -2207,4 +2214,37 @@ func sidebarHint() string {
 		return "F2"
 	}
 	return "Ctrl+B"
+}
+
+// renderSources draws the citation list under an assistant answer.
+func (a *App) renderSources(srcs []Source) string {
+	if len(srcs) == 0 {
+		return ""
+	}
+	muted := lipgloss.NewStyle().Foreground(a.cfg.Theme.Muted)
+	title := lipgloss.NewStyle().Foreground(a.cfg.Theme.SubText)
+	maxW := a.viewport.Width() - 6
+	var sb strings.Builder
+	sb.WriteString(muted.Render(fmt.Sprintf("Sources (%d)", len(srcs))) + "\n")
+	for i, s := range srcs {
+		line := fmt.Sprintf("[%d] %s", i+1, sourceLabel(s))
+		if maxW > 10 && ansi.StringWidth(line) > maxW {
+			line = ansi.Truncate(line, maxW, "…")
+		}
+		sb.WriteString("  " + title.Render(line) + "\n")
+	}
+	sb.WriteString("\n")
+	return sb.String()
+}
+
+// sourceLabel formats one source as "title · location · 0.82".
+func sourceLabel(s Source) string {
+	parts := []string{s.Title}
+	if s.Location != "" && s.Location != s.Title {
+		parts = append(parts, s.Location)
+	}
+	if s.Score > 0 {
+		parts = append(parts, fmt.Sprintf("%.2f", s.Score))
+	}
+	return strings.Join(parts, " · ")
 }

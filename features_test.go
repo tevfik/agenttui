@@ -499,3 +499,24 @@ func TestRunShellCommand_TruncatesLargeOutput(t *testing.T) {
 	assert.Contains(t, out, "output truncated")
 	assert.Less(t, len(out), maxShellOutput+200)
 }
+
+func TestStreamEvents_SourcesAttachToAnswerAndExport(t *testing.T) {
+	a := newSizedApp(Config{
+		StreamEvents: func(ctx context.Context, p string, emit func(Event)) (int, error) { return 1, nil },
+	})
+	a.handleSubmit("q")
+	a.Update(streamEventMsg{Event{Kind: EventSources, Sources: []Source{{Title: "a.md", Location: "docs/a.md", Score: 0.9}, {Title: "b.go"}}}})
+	a.Update(streamChunkMsg{chunk: "answer"})
+	a.Update(streamDoneMsg{tokens: 1})
+
+	last := a.messages[len(a.messages)-1]
+	require.Len(t, last.Sources, 2)
+	assert.Nil(t, a.pendingSources)
+	assert.Contains(t, a.renderMessages(), "Sources (2)")
+	assert.Equal(t, "a.md · docs/a.md · 0.90", sourceLabel(last.Sources[0]))
+
+	mdPath, _, err := a.ExportSession(t.TempDir(), "s")
+	require.NoError(t, err)
+	b, _ := os.ReadFile(mdPath)
+	assert.Contains(t, string(b), "1. a.md · docs/a.md · 0.90")
+}
