@@ -4,9 +4,11 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/signal"
 	"path/filepath"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"charm.land/bubbles/v2/key"
@@ -529,7 +531,23 @@ func (a *App) EmitToolEnd(id, output string, success bool) {
 
 // Run launches the Bubble Tea interactive TUI.
 func (a *App) Run(ctx context.Context) error {
+	// Restore the terminal background on normal exit, panic and SIGTERM/SIGHUP.
 	defer ResetTerminalBackground()
+	defer func() {
+		if r := recover(); r != nil {
+			ResetTerminalBackground()
+			panic(r)
+		}
+	}()
+	sigCh := make(chan os.Signal, 1)
+	signal.Notify(sigCh, syscall.SIGTERM, syscall.SIGHUP)
+	defer signal.Stop(sigCh)
+	go func() {
+		if _, ok := <-sigCh; ok {
+			ResetTerminalBackground()
+			os.Exit(143)
+		}
+	}()
 	SetTerminalBackground(ThemeHex(a.cfg.Theme.BgDark))
 	p := tea.NewProgram(a)
 	a.mu.Lock()

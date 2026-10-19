@@ -132,6 +132,7 @@ type Config struct {
 	// Presentation hooks, all optional.
 	Banner         []string           // ASCII art shown on the empty-transcript welcome screen
 	QuickActions   []QuickAction      // command list shown under the banner
+	DisableShell   bool               // turn off the '!cmd' shell escape (input starting with '!' is sent as a normal prompt)
 	HideMode       bool               // hide the build/plan mode badge and info row
 	HeaderInfo     func() string      // extra text shown before the model name in the header
 	HeaderInfoWide func() string      // used instead of HeaderInfo while the sidebar is hidden (Ctrl+B) or the terminal is too narrow for it

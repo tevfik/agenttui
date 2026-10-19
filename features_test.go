@@ -492,3 +492,10 @@ func TestHeaderInfoWideReplacesSidebarWhenHidden(t *testing.T) {
 	assert.LessOrEqual(t, ansi.StringWidth(first), 70)
 	assert.Contains(t, first, "app")
 }
+
+func TestRunShellCommand_TruncatesLargeOutput(t *testing.T) {
+	out, err := runShellCommand("", "head -c 200000 /dev/zero | tr '\\0' x")
+	require.NoError(t, err)
+	assert.Contains(t, out, "output truncated")
+	assert.Less(t, len(out), maxShellOutput+200)
+}

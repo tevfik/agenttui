@@ -530,7 +530,7 @@ func (a *App) cancelStream() {
 
 func (a *App) handleSubmit(input string) tea.Cmd {
 	// 1. Instant Shell Execution with '!'
-	if strings.HasPrefix(input, "!") {
+	if strings.HasPrefix(input, "!") && !a.cfg.DisableShell {
 		cmdStr := strings.TrimSpace(input[1:])
 		if cmdStr != "" {
 			a.AddMessage(Message{Role: RoleUser, Content: input})
@@ -691,6 +691,9 @@ func (a *App) expandFileReferences(prompt string) string {
 	return prompt
 }
 
+// maxShellOutput caps what a '!cmd' escape may put into the transcript.
+const maxShellOutput = 64 * 1024
+
 func runShellCommand(workDir, cmdStr string) (string, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 45*time.Second)
 	defer cancel()
@@ -701,6 +704,9 @@ func runShellCommand(workDir, cmdStr string) (string, error) {
 	}
 	out, err := cmd.CombinedOutput()
 	outStr := strings.TrimSpace(string(out))
+	if len(outStr) > maxShellOutput {
+		outStr = outStr[:maxShellOutput] + "\n… (output truncated)"
+	}
 	if err != nil {
 		if outStr != "" {
 			return fmt.Sprintf("```bash\n$ %s\n%s\n```\n_Error: %s_", cmdStr, outStr, err), nil
