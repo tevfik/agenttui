@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/spinner"
 	"charm.land/bubbles/v2/textarea"
 	"charm.land/bubbles/v2/viewport"
@@ -24,13 +25,13 @@ type streamDoneMsg struct {
 	err    error
 }
 type streamEndMsg struct{}
+type streamEventMsg struct{ ev Event }
 type slashDoneMsg struct {
 	input   string
 	out     string
 	isLocal bool
 	err     error
 }
-
 
 // App manages the chat application lifecycle and Bubble Tea program.
 type App struct {
@@ -97,12 +98,14 @@ type App struct {
 	sidebarHidden   bool
 	streamStartTime time.Time
 	streamMu        *sync.Mutex
+	ask             *askState
+	askSeq          int
 }
 
 // New creates a new extensible Agent TUI instance.
 func New(cfg Config) *App {
 	if cfg.Title == "" {
-		cfg.Title = "Devran"
+		cfg.Title = "Agent"
 	}
 	if cfg.Placeholder == "" {
 		cfg.Placeholder = "Type a message… (Enter send · Alt+Enter newline · / commands)"
@@ -118,6 +121,7 @@ func New(cfg Config) *App {
 	ta.CharLimit = 8192
 	ta.SetHeight(3)
 	ta.ShowLineNumbers = false
+	configureEditorKeys(&ta)
 
 	// Clear textarea built-in border so we can draw the outer rounded border cleanly
 	taStyles := ta.Styles()
@@ -144,8 +148,6 @@ func New(cfg Config) *App {
 		historyIdx:   -1,
 		mouseEnabled: cfg.EnableMouse,
 	}
-
-
 
 	// Register built-in slash commands
 	app.RegisterCommand(SlashCommand{
@@ -174,8 +176,29 @@ func New(cfg Config) *App {
 		},
 	})
 
+	app.RegisterCommand(SlashCommand{
+		Name:        "retry",
+		Description: "Regenerate the last response",
+		Handler: func(ctx context.Context, args []string, a *App) (string, bool, error) {
+			a.dropTrailingCommandEcho()
+			prompt, ok := a.RewindLastTurn()
+			if !ok {
+				return "Nothing to retry.", true, nil
+			}
+			a.textarea.Reset()
+			a.AddMessage(Message{Role: RoleUser, Content: prompt})
+			return a.expandFileReferences(prompt), false, nil
+		},
+	})
+
 	for _, cmd := range cfg.Commands {
 		app.RegisterCommand(cmd)
+	}
+
+	if cfg.Store != nil {
+		if msgs, err := cfg.Store.Load(); err == nil {
+			app.messages = msgs
+		}
 	}
 
 	return app
@@ -265,8 +288,10 @@ func (a *App) SetRepoFiles(files []string) {
 func (a *App) ScanRepoFiles(root string) {
 	var files []string
 	ignoreDirs := map[string]bool{
-		".git": true, "node_modules": true, "vendor": true,
-		"build": true, ".devran": true, ".yaver": true, ".gleann": true,
+		".git": true, "node_modules": true, "vendor": true, "build": true,
+	}
+	for _, d := range a.cfg.IgnoreDirs {
+		ignoreDirs[d] = true
 	}
 
 	_ = filepath.WalkDir(root, func(path string, d os.DirEntry, err error) error {
@@ -308,7 +333,6 @@ func (a *App) AddChangedFile(file string) {
 	a.changedFiles = append(a.changedFiles, file)
 }
 
-
 // AddMessage appends a message to the conversation.
 func (a *App) AddMessage(msg Message) {
 	a.mu.Lock()
@@ -331,6 +355,27 @@ func (a *App) AddMessage(msg Message) {
 	if ready {
 		a.viewport.SetContent(a.renderMessages())
 	}
+}
+
+// dropTrailingCommandEcho removes the "/cmd" user message that handleSubmit
+// echoes before running a slash command, so /retry rewinds the real last turn.
+func (a *App) dropTrailingCommandEcho() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if n := len(a.messages); n > 0 && a.messages[n-1].Role == RoleUser && strings.HasPrefix(a.messages[n-1].Content, "/") {
+		a.messages = a.messages[:n-1]
+	}
+}
+
+// saveSession persists the transcript through cfg.Store, if configured.
+func (a *App) saveSession() {
+	if a.cfg.Store == nil {
+		return
+	}
+	a.mu.RLock()
+	msgs := append([]Message(nil), a.messages...)
+	a.mu.RUnlock()
+	_ = a.cfg.Store.Save(msgs)
 }
 
 // ClearMessages removes all messages from the conversation transcript.
@@ -470,7 +515,9 @@ func (a *App) Run(ctx context.Context) error {
 	defer ResetTerminalBackground()
 	SetTerminalBackground(ThemeHex(a.cfg.Theme.BgDark))
 	p := tea.NewProgram(a)
+	a.mu.Lock()
 	a.program = p
+	a.mu.Unlock()
 	_, err := p.Run()
 	return err
 }
@@ -483,4 +530,20 @@ func waitForStream(ch <-chan tea.Msg) tea.Cmd {
 		}
 		return msg
 	}
+}
+
+// configureEditorKeys adds the editing shortcuts users expect from Claude Code
+// and OpenCode on top of the textarea defaults (Home/End, Ctrl+A/E, Ctrl+K,
+// Ctrl+W, Alt+arrows, Ctrl+Home/End are already bound):
+//
+//	Ctrl+←/→                  move by word
+//	Ctrl+Shift+←/→            move by word (terminals that report Shift)
+//	Ctrl+Backspace/Delete     delete word backward/forward
+//	Ctrl+U                    delete to line start
+func configureEditorKeys(ta *textarea.Model) {
+	km := &ta.KeyMap
+	km.WordForward = key.NewBinding(key.WithKeys("alt+right", "alt+f", "ctrl+right", "ctrl+shift+right"), key.WithHelp("ctrl+→", "word forward"))
+	km.WordBackward = key.NewBinding(key.WithKeys("alt+left", "alt+b", "ctrl+left", "ctrl+shift+left"), key.WithHelp("ctrl+←", "word backward"))
+	km.DeleteWordBackward = key.NewBinding(key.WithKeys("alt+backspace", "ctrl+w", "ctrl+backspace"), key.WithHelp("ctrl+backspace", "delete word backward"))
+	km.DeleteWordForward = key.NewBinding(key.WithKeys("alt+delete", "alt+d", "ctrl+delete"), key.WithHelp("ctrl+delete", "delete word forward"))
 }

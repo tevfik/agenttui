@@ -17,7 +17,7 @@ func (a *App) ExportSession(outDir, baseName string) (mdPath, htmlPath string, e
 	copy(msgs, a.messages)
 	title := a.cfg.Title
 	if title == "" {
-		title = "Devran AI Chat Session"
+		title = "AI Chat Session"
 	}
 	model := a.modelName
 	a.mu.RUnlock()

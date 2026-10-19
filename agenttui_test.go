@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -144,10 +145,10 @@ type mockWidget struct {
 	visible bool
 }
 
-func (m *mockWidget) Title() string                   { return "Mock Sidebar" }
-func (m *mockWidget) Render(w, h int) string          { return "Sidebar Content" }
+func (m *mockWidget) Title() string                        { return "Mock Sidebar" }
+func (m *mockWidget) Render(w, h int) string               { return "Sidebar Content" }
 func (m *mockWidget) Update(msg tea.Msg) (Widget, tea.Cmd) { return m, nil }
-func (m *mockWidget) Visible() bool                   { return m.visible }
+func (m *mockWidget) Visible() bool                        { return m.visible }
 
 func TestApp_SidebarWidget(t *testing.T) {
 	app := New(Config{
@@ -528,7 +529,7 @@ func TestApp_Scrollbar_WideLinesDoNotBreakAlignment(t *testing.T) {
 			break
 		}
 		// Skip header rows (before viewport content)
-		if strings.Contains(l, "Devran") || strings.Contains(l, "─") {
+		if strings.Contains(l, "Agent") || strings.Contains(l, "─") {
 			continue
 		}
 
@@ -600,7 +601,7 @@ func TestApp_ClaudeStyleFraming(t *testing.T) {
 	assert.Contains(t, rendered, "Can you analyze this project?")
 
 	// Verify Assistant message has identity indicator
-	assert.Contains(t, rendered, "◈ Devran")
+	assert.Contains(t, rendered, "◈ Agent")
 	assert.Contains(t, rendered, "architecture")
 	assert.Contains(t, rendered, "overview")
 
@@ -650,7 +651,7 @@ func TestApp_ThinkingCollapsibleAndToggle(t *testing.T) {
 	// Add assistant message with thinking tags
 	msgContent := "<think>\nAnalyzing the requested algorithm and checking edge cases.\n</think>\nHere is the solution."
 	app.AddMessage(Message{
-		Role: RoleAssistant,
+		Role:    RoleAssistant,
 		Content: msgContent,
 	})
 
@@ -851,5 +852,23 @@ func TestApp_ExtractCodeBlocks(t *testing.T) {
 	assert.NotContains(t, extracted, "Here is some code:")
 }
 
+func TestApp_ExpandFileReferences_RejectsPathsOutsideWorkDir(t *testing.T) {
+	root := t.TempDir()
+	work := filepath.Join(root, "work")
+	require.NoError(t, os.Mkdir(work, 0o755))
+	require.NoError(t, os.WriteFile(filepath.Join(work, "ok.txt"), []byte("inside"), 0o644))
+	secret := filepath.Join(root, "secret.txt")
+	require.NoError(t, os.WriteFile(secret, []byte("TOPSECRET"), 0o644))
+	require.NoError(t, os.Symlink(secret, filepath.Join(work, "link.txt")))
 
+	app := New(Config{Theme: DefaultTheme(), WorkDir: work})
 
+	for _, ref := range []string{"@../secret.txt", "@" + secret, "@link.txt"} {
+		out := app.expandFileReferences("read " + ref)
+		assert.NotContains(t, out, "TOPSECRET", ref)
+		assert.NotContains(t, out, "<file", ref)
+	}
+
+	out := app.expandFileReferences("read @ok.txt and @" + filepath.Join(work, "ok.txt"))
+	assert.Contains(t, out, "inside")
+}

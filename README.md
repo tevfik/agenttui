@@ -16,9 +16,13 @@ A modern, responsive, and extensible Terminal User Interface (TUI) engine built 
 - 🎨 **Theme Engine:** Anthropic Claude Code aesthetic (warm terracotta & peach) and modern deep Devran aesthetic (violet & cyan) out of the box.
 - 📐 **Responsive Sidebar & Split View:** Adaptive layout automatically shows a rich context panel (modes, tools, stats, tokens) on wide screens and collapses gracefully on narrow viewports.
 - 📜 **Proportional Viewport Scrollbar:** Smooth vertical scrollbar track with dynamic thumb sizing.
-- 🛡️ **Table-Safe Turn Banners:** Horizontal divider banners (`── ❯ You · 15:04 ──` and `◈ Devran · 15:04`) that never corrupt markdown tables, code blocks, or ANSI codes.
+- 🛡️ **Table-Safe Turn Banners:** Horizontal divider banners (`── ❯ You · 15:04 ──` and `◈ <Title> · 15:04`) that never corrupt markdown tables, code blocks, or ANSI codes.
 - 🔔 **Toast Notifications & Statuses:** Non-intrusive status alerts for clipboard actions, mode changes, and errors.
 - ⚡ **Instant Shell Escapes:** Run commands directly in chat via `!cmd` without interrupting conversational history.
+
+- ❓ **Ask / Approval Prompts:** `app.Ask(ctx, agenttui.Question{...})` blocks a handler until the user picks an option or types an answer.
+- 🧩 **Typed Event Stream:** `Config.StreamEvents` reports text, thinking and tool start/end as separate events (no `<think>` tag parsing).
+- 💾 **Session Store & Retry:** optional `Config.Store` (Load/Save) for resume; `/retry` regenerates the last answer.
 
 ---
 
@@ -45,7 +49,7 @@ import (
 
 func main() {
 	app := agenttui.New(agenttui.Config{
-		Title:     "Devran",
+		Title:     "My Agent",
 		ModelName: "qwen3.5:9b",
 		Theme:     agenttui.ClaudeTheme(),
 		Stream: func(ctx context.Context, prompt string, emit func(chunk string)) (int, error) {
@@ -95,3 +99,22 @@ func main() {
 ## 📄 License
 
 MIT License. See [LICENSE](LICENSE) for details.
+
+
+## Agent-facing API
+
+```go
+app := agenttui.New(agenttui.Config{
+	Title: "My Agent",
+	StreamEvents: func(ctx context.Context, prompt string, emit func(agenttui.Event)) (int, error) {
+		emit(agenttui.Event{Kind: agenttui.EventThinking, Text: "checking the repo…"})
+		emit(agenttui.Event{Kind: agenttui.EventToolStart, ToolID: "1", ToolName: "shell", ToolArgs: "ls"})
+		ans, err := app.Ask(ctx, agenttui.Question{Text: "Run `rm -rf build`?", Options: []string{"yes", "no"}, Default: "no"})
+		emit(agenttui.Event{Kind: agenttui.EventToolEnd, ToolID: "1", ToolOutput: ans, ToolOK: err == nil})
+		emit(agenttui.Event{Kind: agenttui.EventText, Text: "Done."})
+		return 0, nil
+	},
+})
+```
+
+`Ask` returns `ErrAskCancelled` on Esc/Ctrl+C and `ErrNotRunning` before `Run`. Implement `Store` to persist the transcript between runs.

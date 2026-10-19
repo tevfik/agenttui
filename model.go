@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"image/color"
+	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -101,6 +102,9 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if !a.initDone {
 			return a, nil
+		}
+		if a.ask != nil {
+			return a.handleAskKey(msg)
 		}
 
 		switch keyStr {
@@ -300,7 +304,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.textarea.InsertString("\n")
 			return a, nil
 
-		case "pgup", "ctrl+u":
+		case "pgup":
 			a.viewport.ScrollUp(6)
 			return a, nil
 
@@ -308,6 +312,16 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.viewport.ScrollDown(6)
 			return a, nil
 		}
+
+	case askOpenMsg:
+		a.openAsk(msg.st)
+		return a, nil
+
+	case askCloseMsg:
+		if a.ask != nil && a.ask.id == msg.id {
+			a.closeAsk()
+		}
+		return a, nil
 
 	case streamChunkMsg:
 		if !a.streaming {
@@ -318,6 +332,22 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.streamMu.Unlock()
 
 		a.viewport.SetContent(a.renderMessagesfast())
+		a.viewport.GotoBottom()
+		return a, waitForStream(a.streamCh)
+
+	case streamEventMsg:
+		if !a.streaming {
+			return a, nil
+		}
+		a.flushStreamBuf()
+		switch msg.ev.Kind {
+		case EventToolStart:
+			a.EmitToolStart(msg.ev.ToolID, msg.ev.ToolName, msg.ev.ToolArgs)
+		case EventToolEnd:
+			a.EmitToolEnd(msg.ev.ToolID, msg.ev.ToolOutput, msg.ev.ToolOK)
+		}
+		a.cacheCount = 0
+		a.viewport.SetContent(a.renderMessages())
 		a.viewport.GotoBottom()
 		return a, waitForStream(a.streamCh)
 
@@ -360,6 +390,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmds = append(cmds, a.SetNotification(fmt.Sprintf("◇ %s · %s · %dtok", a.modelName, responseTime, msg.tokens), NotifyInfo))
 		}
 
+		a.saveSession()
 		a.cacheCount = 0 // force rebuild cache
 		a.recalcViewport()
 		a.viewport.SetContent(a.renderMessages())
@@ -396,7 +427,6 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.viewport.GotoBottom()
 		return a, nil
 
-
 	case spinner.TickMsg:
 		// Only tick when actively streaming or waiting! Prevents runaway loops.
 		if a.waiting || a.streaming {
@@ -428,6 +458,20 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	}
 
 	return a, tea.Batch(cmds...)
+}
+
+// flushStreamBuf commits streamed text accumulated so far as an assistant
+// message, so tool events keep their chronological position in the transcript.
+func (a *App) flushStreamBuf() {
+	a.streamMu.Lock()
+	partial := a.streamBuf.String()
+	a.streamBuf.Reset()
+	a.streamMu.Unlock()
+	if strings.TrimSpace(partial) == "" {
+		return
+	}
+	thinking, clean := extractThinkingTags(partial)
+	a.AddMessage(Message{Role: RoleAssistant, Content: clean, Thinking: thinking})
 }
 
 func (a *App) cancelStream() {
@@ -529,6 +573,60 @@ func (a *App) handleSubmit(input string) tea.Cmd {
 	return a.startStreamPrompt(expanded)
 }
 
+const maxAttachmentBytes = 40000
+
+// resolveWorkspacePath maps an @reference onto a file inside the working
+// directory (the process cwd when none is set). Paths that escape it, via "..",
+// absolute paths or symlinks, are rejected so prompt text cannot exfiltrate
+// arbitrary files such as ~/.ssh keys to the LLM.
+func (a *App) resolveWorkspacePath(ref string) (string, bool) {
+	root := a.workDir
+	if root == "" {
+		wd, err := os.Getwd()
+		if err != nil {
+			return "", false
+		}
+		root = wd
+	}
+	root, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		return "", false
+	}
+	if root, err = filepath.Abs(root); err != nil {
+		return "", false
+	}
+	target := ref
+	if !filepath.IsAbs(target) {
+		target = filepath.Join(root, target)
+	}
+	target, err = filepath.EvalSymlinks(target)
+	if err != nil {
+		return "", false
+	}
+	rel, err := filepath.Rel(root, target)
+	if err != nil || rel == ".." || strings.HasPrefix(rel, ".."+string(filepath.Separator)) {
+		return "", false
+	}
+	return target, true
+}
+
+// readFileCapped reads at most max bytes, appending a truncation marker.
+func readFileCapped(path string, max int) (string, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return "", err
+	}
+	defer f.Close()
+	buf, err := io.ReadAll(io.LimitReader(f, int64(max)+1))
+	if err != nil {
+		return "", err
+	}
+	if len(buf) > max {
+		return string(buf[:max]) + "\n...(truncated)", nil
+	}
+	return string(buf), nil
+}
+
 func (a *App) expandFileReferences(prompt string) string {
 	words := strings.Fields(prompt)
 	var attachments []string
@@ -541,17 +639,13 @@ func (a *App) expandFileReferences(prompt string) string {
 			if seen[relPath] {
 				continue
 			}
-			targetPath := relPath
-			if a.workDir != "" && !filepath.IsAbs(targetPath) {
-				targetPath = filepath.Join(a.workDir, relPath)
+			targetPath, ok := a.resolveWorkspacePath(relPath)
+			if !ok {
+				continue
 			}
-			if stat, err := os.Stat(targetPath); err == nil && !stat.IsDir() {
+			if stat, err := os.Stat(targetPath); err == nil && stat.Mode().IsRegular() {
 				seen[relPath] = true
-				if content, err := os.ReadFile(targetPath); err == nil {
-					text := string(content)
-					if len(text) > 40000 {
-						text = text[:40000] + "\n...(truncated)"
-					}
+				if text, err := readFileCapped(targetPath, maxAttachmentBytes); err == nil {
 					attachments = append(attachments, fmt.Sprintf("<file path=%q>\n%s\n</file>", relPath, text))
 				}
 			}
@@ -587,7 +681,7 @@ func runShellCommand(workDir, cmdStr string) (string, error) {
 }
 
 func (a *App) startStreamPrompt(prompt string) tea.Cmd {
-	if a.cfg.Stream == nil {
+	if a.cfg.Stream == nil && a.cfg.StreamEvents == nil {
 		a.AddMessage(Message{Role: RoleError, Content: "No StreamHandler configured."})
 		a.cacheCount = 0
 		a.viewport.SetContent(a.renderMessages())
@@ -604,12 +698,42 @@ func (a *App) startStreamPrompt(prompt string) tea.Cmd {
 	a.streamCtx, a.streamCancel = context.WithCancel(context.Background())
 
 	go func(p string, ch chan tea.Msg, ctx context.Context) {
-		tokens, err := a.cfg.Stream(ctx, p, func(chunk string) {
+		send := func(m tea.Msg) {
 			select {
 			case <-ctx.Done():
-			case ch <- streamChunkMsg{chunk: chunk}:
+			case ch <- m:
 			}
-		})
+		}
+		var tokens int
+		var err error
+		if a.cfg.StreamEvents != nil {
+			inThink := false
+			closeThink := func() {
+				if inThink {
+					send(streamChunkMsg{chunk: "</think>"})
+					inThink = false
+				}
+			}
+			tokens, err = a.cfg.StreamEvents(ctx, p, func(ev Event) {
+				switch ev.Kind {
+				case EventThinking:
+					if !inThink {
+						send(streamChunkMsg{chunk: "<think>"})
+						inThink = true
+					}
+					send(streamChunkMsg{chunk: ev.Text})
+				case EventText:
+					closeThink()
+					send(streamChunkMsg{chunk: ev.Text})
+				default:
+					closeThink()
+					send(streamEventMsg{ev})
+				}
+			})
+			closeThink()
+		} else {
+			tokens, err = a.cfg.Stream(ctx, p, func(chunk string) { send(streamChunkMsg{chunk: chunk}) })
+		}
 		ch <- streamDoneMsg{tokens: tokens, err: err}
 		close(ch)
 	}(prompt, a.streamCh, a.streamCtx)
@@ -872,6 +996,9 @@ func (a *App) chromeHeight() int {
 		popup := a.renderAutocomplete()
 		h += strings.Count(popup, "\n") + 1
 	}
+	if a.ask != nil {
+		h += len(a.renderAsk())
+	}
 	// Textarea is height 3 + top border + bottom border = 5 lines
 	h += 5
 	if a.cfg.ShowFooter {
@@ -1032,7 +1159,7 @@ func (a *App) renderWelcomeHero(vpW int) string {
 			sb.WriteString(primary.Render(line) + "\n")
 		}
 	} else {
-		sb.WriteString(primary.Render("  [ DEVRAN AI AGENT ]") + "\n")
+		sb.WriteString(primary.Render("  [ "+strings.ToUpper(a.cfg.Title)+" ]") + "\n")
 	}
 
 	sb.WriteString("\n")
@@ -1057,7 +1184,7 @@ func (a *App) renderWelcomeHero(vpW int) string {
 		{"/search", "Semantic & AST code search via Gleann"},
 		{"/review", "Multi-agent review working changes"},
 		{"/test", "Run project test suite & verify fixes"},
-		{"/theme", "Switch UI theme (claude / devran)"},
+		{"/theme", "Switch UI theme"},
 		{"/help", "List all slash commands & shortcuts"},
 	}
 
@@ -1866,7 +1993,9 @@ func (a *App) View() tea.View {
 		bottomLines = append(bottomLines, " "+indicator)
 	}
 
-	if a.autoActive && len(a.autoFiltered) > 0 {
+	if a.ask != nil {
+		bottomLines = append(bottomLines, a.renderAsk()...)
+	} else if a.autoActive && len(a.autoFiltered) > 0 {
 		popup := a.renderAutocomplete()
 		bottomLines = append(bottomLines, strings.Split(popup, "\n")...)
 	}
@@ -1996,4 +2125,3 @@ func (a *App) View() tea.View {
 	}
 	return v
 }
-

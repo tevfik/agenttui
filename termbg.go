@@ -16,7 +16,7 @@ func SetTerminalBackground(hexColor string) {
 	if hexColor == "" || os.Getenv("TERM") == "dumb" {
 		return
 	}
-	if os.Getenv("AGENTTUI_NO_TERM_BG") != "" || os.Getenv("DEVRAN_NO_TERM_BG") != "" {
+	if os.Getenv("AGENTTUI_NO_TERM_BG") != "" {
 		return
 	}
 	fd := os.Stdout.Fd()
@@ -36,7 +36,7 @@ func ResetTerminalBackground() {
 	if os.Getenv("TERM") == "dumb" {
 		return
 	}
-	if os.Getenv("AGENTTUI_NO_TERM_BG") != "" || os.Getenv("DEVRAN_NO_TERM_BG") != "" {
+	if os.Getenv("AGENTTUI_NO_TERM_BG") != "" {
 		return
 	}
 	fd := os.Stdout.Fd()

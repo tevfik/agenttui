@@ -54,6 +54,39 @@ type Message struct {
 // It yields chunks via emit() and returns the total tokens or an error when done.
 type StreamHandler func(ctx context.Context, prompt string, emit func(chunk string)) (tokens int, err error)
 
+// EventKind identifies the type of a streaming Event.
+type EventKind int
+
+const (
+	EventText      EventKind = iota // Text: a chunk of answer content
+	EventThinking                   // Text: a chunk of reasoning
+	EventToolStart                  // ToolID, ToolName, ToolArgs
+	EventToolEnd                    // ToolID, ToolOutput, ToolOK
+)
+
+// Event is one typed item of an agent response stream.
+type Event struct {
+	Kind       EventKind
+	Text       string
+	ToolID     string
+	ToolName   string
+	ToolArgs   string
+	ToolOutput string
+	ToolOK     bool
+}
+
+// EventStreamHandler is the typed alternative to StreamHandler. Reasoning and
+// tool calls are reported as separate events instead of being inferred from
+// <think> tags in the text.
+type EventStreamHandler func(ctx context.Context, prompt string, emit func(Event)) (tokens int, err error)
+
+// Store persists the conversation so a session can be resumed. Load is called
+// once by New; Save after every completed turn.
+type Store interface {
+	Load() ([]Message, error)
+	Save([]Message) error
+}
+
 // SlashCommand defines an interactive command starting with '/'.
 type SlashCommand struct {
 	Name        string // e.g. "help", "model", "clear"
@@ -80,10 +113,13 @@ type Config struct {
 	Placeholder string
 	Theme       Theme
 	Stream      StreamHandler
-	Commands    []SlashCommand
-	Sidebar     Widget
-	EnableMouse bool
-	ShowHeader  bool
-	ShowFooter  bool
+	// StreamEvents, when set, takes precedence over Stream.
+	StreamEvents EventStreamHandler
+	Store        Store    // optional session persistence
+	IgnoreDirs   []string // extra directory names skipped by @file completion
+	Commands     []SlashCommand
+	Sidebar      Widget
+	EnableMouse  bool
+	ShowHeader   bool
+	ShowFooter   bool
 }
-
