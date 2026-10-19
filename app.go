@@ -206,6 +206,19 @@ func New(cfg Config) *App {
 	return app
 }
 
+type submitMsg struct{ input string }
+
+// Submit feeds input to the app as if the user had typed it and pressed Enter
+// (slash commands included). Safe to call from any goroutine; a no-op before Run.
+func (a *App) Submit(input string) {
+	a.mu.RLock()
+	p := a.program
+	a.mu.RUnlock()
+	if p != nil {
+		p.Send(submitMsg{input})
+	}
+}
+
 // RegisterCommand adds or updates a slash command in the registry without duplicates.
 func (a *App) RegisterCommand(cmd SlashCommand) {
 	a.mu.Lock()

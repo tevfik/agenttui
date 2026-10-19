@@ -334,6 +334,12 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.openAsk(msg.st)
 		return a, nil
 
+	case submitMsg:
+		if a.ask != nil || a.form != nil || a.streaming || a.waiting {
+			return a, nil
+		}
+		return a, a.handleSubmit(msg.input)
+
 	case formOpenMsg:
 		a.openForm(msg.st)
 		return a, nil

@@ -377,3 +377,18 @@ func TestPresentationHooks(t *testing.T) {
 	a.Update(tea.KeyPressMsg{Code: 'a', Text: "a"})
 	assert.Equal(t, "xa", a.textarea.Value())
 }
+
+func TestSubmit_RunsSlashCommandLikeTyping(t *testing.T) {
+	a := newSizedApp(Config{Commands: []SlashCommand{{Name: "ping", Handler: func(ctx context.Context, args []string, app *App) (string, bool, error) {
+		return "pong", true, nil
+	}}}})
+	a.Submit("/ping") // no program yet: must not panic or block
+
+	_, cmd := a.Update(submitMsg{"/ping"})
+	assert.NotNil(t, cmd)
+	assert.True(t, a.waiting, "command is running")
+	assert.Equal(t, "/ping", a.messages[len(a.messages)-1].Content)
+
+	_, cmd = a.Update(submitMsg{"/ping"})
+	assert.Nil(t, cmd, "submit is ignored while a turn is running")
+}
