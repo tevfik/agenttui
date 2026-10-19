@@ -431,3 +431,31 @@ func TestSubmit_FromOnKeyDoesNotDeadlock(t *testing.T) {
 		t.Fatal("Submit from OnKey deadlocked the program")
 	}
 }
+
+func TestForm_SliderShowsLimitsAndClamps(t *testing.T) {
+	a := newSizedApp(Config{})
+	st := openTestForm(a, Form{Title: "S", Note: "changing embedding needs a rebuild", Fields: []Field{
+		{Label: "Temperature", Kind: FieldSlider, Value: "0.1", Options: []string{"0.0", "0.1", "0.2", "0.3"}, Hint: "creativity"},
+		{Label: "Top-K", Kind: FieldSlider, Value: "5", Min: 1, Max: 6, Step: 1, Format: "%.0f"},
+	}})
+	view := ansi.Strip(strings.Join(a.renderForm(), "\n"))
+	assert.Contains(t, view, "0.0 … 0.3")
+	assert.Contains(t, view, "creativity")
+	assert.Contains(t, view, "changing embedding")
+	assert.Contains(t, view, "━")
+
+	left, right := tea.KeyPressMsg{Code: tea.KeyLeft}, tea.KeyPressMsg{Code: tea.KeyRight}
+	a.Update(left)
+	a.Update(left) // clamps at the first preset
+	assert.Equal(t, "0.0", st.f.Fields[0].Value)
+	for i := 0; i < 6; i++ {
+		a.Update(right)
+	}
+	assert.Equal(t, "0.3", st.f.Fields[0].Value, "clamps at the last preset")
+
+	a.Update(keyMsg("down"))
+	assert.Contains(t, ansi.Strip(strings.Join(a.renderForm(), "\n")), "1 … 6")
+	a.Update(right)
+	a.Update(right)
+	assert.Equal(t, "6", st.f.Fields[1].Value, "numeric slider clamps at Max")
+}

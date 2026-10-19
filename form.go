@@ -19,6 +19,7 @@ const (
 	FieldNumber                  // ←/→ changes the value by Step within [Min, Max]
 	FieldBool                    // ←/→ or Space toggles "on"/"off"
 	FieldText                    // Enter edits the value in the input box
+	FieldSlider                  // like Choice/Number but drawn as a bar with its limits; ←/→ clamp at the ends
 )
 
 // Field is one editable setting of a Form. Values are exchanged as strings:
@@ -27,15 +28,18 @@ type Field struct {
 	Label    string
 	Kind     FieldKind
 	Value    string
-	Options  []string // FieldChoice
-	Min, Max float64  // FieldNumber (ignored when Max <= Min)
-	Step     float64  // FieldNumber (default 1)
+	Options  []string // FieldChoice; for FieldSlider the ordered preset values (first = min, last = max)
+	Min, Max float64  // FieldNumber / numeric FieldSlider (ignored when Max <= Min for Number)
+	Step     float64  // FieldNumber / numeric FieldSlider (default 1)
+	Format   string   // numeric FieldSlider: printf format for the limits, default "%g"
+	Hint     string   // one-line help shown while the field is focused
 }
 
 // Form is a settings panel: a list of fields edited in place.
 type Form struct {
 	Title  string
 	Fields []Field
+	Note   string // optional read-only line shown under the fields
 }
 
 type formState struct {
@@ -61,7 +65,7 @@ func (a *App) Form(ctx context.Context, f Form) ([]string, error) {
 	a.mu.Lock()
 	p := a.program
 	a.askSeq++
-	st := &formState{id: a.askSeq, f: Form{Title: f.Title, Fields: append([]Field(nil), f.Fields...)}, reply: make(chan formReply, 1)}
+	st := &formState{id: a.askSeq, f: Form{Title: f.Title, Note: f.Note, Fields: append([]Field(nil), f.Fields...)}, reply: make(chan formReply, 1)}
 	a.mu.Unlock()
 	if p == nil {
 		return nil, ErrNotRunning
@@ -183,7 +187,33 @@ func (f *Field) adjust(dir int) {
 		} else {
 			f.Value = "on"
 		}
+	case FieldSlider:
+		if len(f.Options) > 0 {
+			idx := 0
+			for i, o := range f.Options {
+				if o == f.Value {
+					idx = i
+				}
+			}
+			idx += dir
+			if idx < 0 {
+				idx = 0
+			}
+			if idx >= len(f.Options) {
+				idx = len(f.Options) - 1
+			}
+			f.Value = f.Options[idx]
+			return
+		}
+		f.adjustNumber(dir)
 	case FieldNumber:
+		f.adjustNumber(dir)
+	}
+}
+
+// adjustNumber moves a numeric value one Step, clamped to [Min, Max] when set.
+func (f *Field) adjustNumber(dir int) {
+	{
 		v, err := strconv.ParseFloat(f.Value, 64)
 		if err != nil {
 			v = f.Min
@@ -200,6 +230,43 @@ func (f *Field) adjust(dir int) {
 	}
 }
 
+// sliderBar draws "◂ ━━━━──── ▸ min … max" for a slider field.
+func (f Field) sliderBar(th Theme, active bool, barW int) string {
+	ratio, lo, hi := 0.0, "", ""
+	if len(f.Options) > 0 {
+		lo, hi = f.Options[0], f.Options[len(f.Options)-1]
+		if len(f.Options) > 1 {
+			for i, o := range f.Options {
+				if o == f.Value {
+					ratio = float64(i) / float64(len(f.Options)-1)
+				}
+			}
+		}
+	} else {
+		format := f.Format
+		if format == "" {
+			format = "%g"
+		}
+		lo, hi = fmt.Sprintf(format, f.Min), fmt.Sprintf(format, f.Max)
+		if v, err := strconv.ParseFloat(f.Value, 64); err == nil && f.Max > f.Min {
+			ratio = math.Max(0, math.Min(1, (v-f.Min)/(f.Max-f.Min)))
+		}
+	}
+	filled := int(math.Round(ratio * float64(barW)))
+	filledColor := th.Primary
+	if active {
+		filledColor = th.Accent
+	}
+	bar := lipgloss.NewStyle().Foreground(filledColor).Render(strings.Repeat("━", filled)) +
+		lipgloss.NewStyle().Foreground(th.Muted).Render(strings.Repeat("─", barW-filled))
+	arrowL, arrowR := " ", " "
+	if active {
+		arrowL = lipgloss.NewStyle().Foreground(th.Primary).Render("◂")
+		arrowR = lipgloss.NewStyle().Foreground(th.Primary).Render("▸")
+	}
+	return arrowL + bar + arrowR + " " + lipgloss.NewStyle().Foreground(th.Muted).Render(lo+" … "+hi)
+}
+
 // renderForm draws the settings panel shown above the input box.
 func (a *App) renderForm() []string {
 	st := a.form
@@ -213,11 +280,20 @@ func (a *App) renderForm() []string {
 			labelW = w
 		}
 	}
+	barW := a.width - labelW - 44
+	if barW > 24 {
+		barW = 24
+	}
+	if barW < 8 {
+		barW = 8
+	}
 	maxVal := a.width - labelW - 12
 	if maxVal < 10 {
 		maxVal = 10
 	}
+	valStyle := lipgloss.NewStyle().Bold(true).Foreground(th.Accent)
 	for i, f := range st.f.Fields {
+		active := i == st.cursor
 		val := f.Value
 		if f.Kind == FieldText {
 			val = strings.Join(strings.Fields(val), " ")
@@ -228,22 +304,34 @@ func (a *App) renderForm() []string {
 		if lipgloss.Width(val) > maxVal {
 			val = string([]rune(val)[:maxVal-1]) + "…"
 		}
-		switch f.Kind {
-		case FieldChoice, FieldNumber, FieldBool:
-			val = "‹ " + val + " ›"
-		}
 		mark, style := "  ", lipgloss.NewStyle().Foreground(th.SubText)
-		if i == st.cursor {
+		if active {
 			mark, style = "❯ ", lipgloss.NewStyle().Bold(true).Foreground(th.Primary)
 		}
 		pad := strings.Repeat(" ", labelW-lipgloss.Width(f.Label))
-		lines = append(lines, "   "+style.Render(fmt.Sprintf("%s%s%s  %s", mark, f.Label, pad, val)))
+		head := "   " + style.Render(mark+f.Label+pad) + "  "
+		switch f.Kind {
+		case FieldSlider:
+			lines = append(lines, head+valStyle.Render(fmt.Sprintf("%-6s", val))+f.sliderBar(th, active, barW))
+		case FieldChoice, FieldNumber, FieldBool:
+			lines = append(lines, head+style.Render("‹ "+val+" ›"))
+		default:
+			lines = append(lines, head+style.Render(val))
+		}
 	}
+
 	hint := "↑/↓ field · ←/→ change · Enter save · Esc cancel"
+	focused := st.f.Fields[st.cursor]
 	if st.editing {
-		hint = "editing " + st.f.Fields[st.cursor].Label + " — Enter keep · Esc discard"
-	} else if st.f.Fields[st.cursor].Kind == FieldText {
+		hint = "editing " + focused.Label + " — Enter keep · Esc discard"
+	} else if focused.Kind == FieldText {
 		hint = "↑/↓ field · Enter edit text · Esc cancel"
+	}
+	if !st.editing && focused.Hint != "" {
+		lines = append(lines, "   "+lipgloss.NewStyle().Foreground(th.SubText).Italic(true).Render(focused.Hint))
+	}
+	if st.f.Note != "" {
+		lines = append(lines, "   "+dim.Render(st.f.Note))
 	}
 	return append(lines, "   "+dim.Render(hint))
 }
