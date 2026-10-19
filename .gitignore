@@ -23,3 +23,6 @@ Thumbs.db
 .vscode/
 *.swp
 *~
+
+# Local agent scratchpad (never commit)
+AGENTS.md

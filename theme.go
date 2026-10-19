@@ -297,4 +297,3 @@ func ThemeByName(name string) Theme {
 		return ClaudeTheme()
 	}
 }
-

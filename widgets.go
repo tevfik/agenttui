@@ -95,8 +95,8 @@ func (w *StatusListWidget) Render(width, height int) string {
 	box := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(w.theme.Border).
-		Width(width - 2).
-		Height(height - 2).
+		Width(width-2).
+		Height(height-2).
 		Padding(0, 1)
 
 	return box.Render(strings.Join(lines, "\n"))
@@ -162,8 +162,8 @@ func (w *KeyValWidget) Render(width, height int) string {
 	box := lipgloss.NewStyle().
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(w.theme.Border).
-		Width(width - 2).
-		Height(height - 2).
+		Width(width-2).
+		Height(height-2).
 		Padding(0, 1)
 
 	return box.Render(strings.Join(lines, "\n"))
