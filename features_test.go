@@ -520,3 +520,24 @@ func TestStreamEvents_SourcesAttachToAnswerAndExport(t *testing.T) {
 	b, _ := os.ReadFile(mdPath)
 	assert.Contains(t, string(b), "1. a.md · docs/a.md · 0.90")
 }
+
+func TestMentions_CompleteAndResolve(t *testing.T) {
+	a := newSizedApp(Config{
+		WorkDir:         t.TempDir(),
+		MentionComplete: func(q string) []string { return []string{"pkg.Handler", "pkg.Handler", ""} },
+		MentionResolve: func(name string) (string, bool) {
+			if name == "pkg.Handler" {
+				return "func Handler() {}", true
+			}
+			return "", false
+		},
+	})
+	a.textarea.SetValue("explain @Hand")
+	a.updateAutocomplete()
+	assert.Equal(t, []string{"pkg.Handler"}, a.autoAtFiles)
+
+	out := a.expandFileReferences("explain @pkg.Handler, and @unknown")
+	assert.Contains(t, out, `<mention name="pkg.Handler">`)
+	assert.Contains(t, out, "func Handler() {}")
+	assert.NotContains(t, out, `name="unknown"`)
+}

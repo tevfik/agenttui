@@ -677,13 +677,19 @@ func (a *App) expandFileReferences(prompt string) string {
 				continue
 			}
 			targetPath, ok := a.resolveWorkspacePath(relPath)
-			if !ok {
-				continue
+			if ok {
+				if stat, err := os.Stat(targetPath); err == nil && stat.Mode().IsRegular() {
+					seen[relPath] = true
+					if text, err := readFileCapped(targetPath, maxAttachmentBytes); err == nil {
+						attachments = append(attachments, fmt.Sprintf("<file path=%q>\n%s\n</file>", relPath, text))
+					}
+					continue
+				}
 			}
-			if stat, err := os.Stat(targetPath); err == nil && stat.Mode().IsRegular() {
+			if a.cfg.MentionResolve != nil {
 				seen[relPath] = true
-				if text, err := readFileCapped(targetPath, maxAttachmentBytes); err == nil {
-					attachments = append(attachments, fmt.Sprintf("<file path=%q>\n%s\n</file>", relPath, text))
+				if text, ok := a.cfg.MentionResolve(relPath); ok && text != "" {
+					attachments = append(attachments, fmt.Sprintf("<mention name=%q>\n%s\n</mention>", relPath, text))
 				}
 			}
 		}
@@ -865,6 +871,18 @@ func (a *App) updateAutocomplete() {
 		a.mu.RUnlock()
 
 		matches := rankFileMatches(repoFiles, query)
+		if a.cfg.MentionComplete != nil && query != "" {
+			seen := make(map[string]bool, len(matches))
+			for _, m := range matches {
+				seen[m] = true
+			}
+			for _, m := range a.cfg.MentionComplete(query) {
+				if m != "" && !seen[m] {
+					matches = append(matches, m)
+					seen[m] = true
+				}
+			}
+		}
 		a.autoAtFiles = matches
 		a.autoFiltered = nil
 		if a.autoCursor >= len(matches) {
