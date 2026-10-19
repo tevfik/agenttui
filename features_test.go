@@ -459,3 +459,36 @@ func TestForm_SliderShowsLimitsAndClamps(t *testing.T) {
 	a.Update(right)
 	assert.Equal(t, "6", st.f.Fields[1].Value, "numeric slider clamps at Max")
 }
+
+func TestHeaderInfoWideReplacesSidebarWhenHidden(t *testing.T) {
+	a := New(Config{
+		Theme: DefaultTheme(), Title: "app", ModelName: "m1", ShowHeader: true,
+		HeaderInfo:     func() string { return "short" },
+		HeaderInfoWide: func() string { return "t=0.7 · rep=1.10 · max=2048" },
+		InfoRows:       func() [][2]string { return [][2]string{{"temperature", "0.7"}} },
+	})
+	a.Update(tea.WindowSizeMsg{Width: 140, Height: 30})
+	a.initDone = true
+
+	visible := ansi.Strip(a.View().Content)
+	assert.Contains(t, visible, "short")
+	assert.NotContains(t, visible, "rep=1.10", "sidebar shows the details, header stays compact")
+	assert.Contains(t, visible, "temperature")
+
+	a.ToggleSidebar()
+	hidden := ansi.Strip(a.View().Content)
+	assert.Contains(t, hidden, "t=0.7 · rep=1.10 · max=2048")
+	assert.NotContains(t, hidden, "short ·")
+	for _, line := range strings.Split(hidden, "\n") {
+		assert.LessOrEqual(t, ansi.StringWidth(line), 140)
+	}
+
+	// Narrow terminal: no sidebar fits, so the wide info is used and truncated, not wrapped.
+	n := New(Config{Theme: DefaultTheme(), Title: "app", ModelName: "m1", ShowHeader: true, WorkDir: "/very/long/working/directory/path/here",
+		HeaderInfoWide: func() string { return strings.Repeat("x", 80) }})
+	n.Update(tea.WindowSizeMsg{Width: 70, Height: 20})
+	n.initDone = true
+	first := strings.Split(ansi.Strip(n.View().Content), "\n")[0]
+	assert.LessOrEqual(t, ansi.StringWidth(first), 70)
+	assert.Contains(t, first, "app")
+}

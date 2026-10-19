@@ -130,12 +130,13 @@ type Config struct {
 	ShowFooter   bool
 
 	// Presentation hooks, all optional.
-	Banner       []string           // ASCII art shown on the empty-transcript welcome screen
-	QuickActions []QuickAction      // command list shown under the banner
-	HideMode     bool               // hide the build/plan mode badge and info row
-	HeaderInfo   func() string      // extra text shown before the model name in the header
-	InfoRows     func() [][2]string // replaces the sidebar's built-in mode/model rows
-	FooterHint   string             // replaces the default key-hint footer
+	Banner         []string           // ASCII art shown on the empty-transcript welcome screen
+	QuickActions   []QuickAction      // command list shown under the banner
+	HideMode       bool               // hide the build/plan mode badge and info row
+	HeaderInfo     func() string      // extra text shown before the model name in the header
+	HeaderInfoWide func() string      // used instead of HeaderInfo while the sidebar is hidden (Ctrl+B) or the terminal is too narrow for it
+	InfoRows       func() [][2]string // replaces the sidebar's built-in mode/model rows
+	FooterHint     string             // replaces the default key-hint footer
 	// OnKey sees every key press before the built-in handling (but not while a
 	// question or form is open). Return true to consume it. It runs on the UI
 	// goroutine: start a goroutine for anything that blocks, e.g. App.Form.

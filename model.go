@@ -1984,17 +1984,28 @@ func (a *App) View() tea.View {
 			left += " " + dim.Render(wd)
 		}
 
+		sidebarW := a.sidebarWidth()
+		infoFn := a.cfg.HeaderInfo
+		if sidebarW == 0 && a.cfg.HeaderInfoWide != nil {
+			infoFn = a.cfg.HeaderInfoWide // the sidebar's info moves into the header
+		}
 		right := dim.Render(a.modelName)
-		if a.cfg.HeaderInfo != nil {
-			if info := a.cfg.HeaderInfo(); info != "" {
+		if infoFn != nil {
+			if info := infoFn(); info != "" {
 				right = dim.Render(info + " · " + a.modelName)
 			}
 		}
-		sidebarW := a.sidebarWidth()
 		if sidebarW == 0 && a.width >= 60 {
 			right += " " + a.renderTokenBar(8)
 		} else if a.totalTokens > 0 && sidebarW == 0 {
 			right += dim.Render(fmt.Sprintf(" · %dtok", a.totalTokens))
+		}
+		// Keep the header on one line: the info wins over the working directory.
+		if maxRight := a.width - 24; maxRight > 10 && lipgloss.Width(right) > maxRight {
+			right = ansi.Truncate(right, maxRight, "…")
+		}
+		if avail := a.width - lipgloss.Width(right) - 5; lipgloss.Width(left) > avail {
+			left = ansi.Truncate(left, max(avail, 8), "…")
 		}
 
 		pad := a.width - lipgloss.Width(left) - lipgloss.Width(right) - 4
