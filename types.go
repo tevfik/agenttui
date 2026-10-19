@@ -103,6 +103,12 @@ type Widget interface {
 	Visible() bool
 }
 
+// QuickAction is one line of the welcome screen's command list.
+type QuickAction struct {
+	Cmd  string // e.g. "/settings"
+	Desc string
+}
+
 // Config holds initialization parameters for the Agent TUI.
 type Config struct {
 	Title       string
@@ -122,4 +128,16 @@ type Config struct {
 	EnableMouse  bool
 	ShowHeader   bool
 	ShowFooter   bool
+
+	// Presentation hooks, all optional.
+	Banner       []string           // ASCII art shown on the empty-transcript welcome screen
+	QuickActions []QuickAction      // command list shown under the banner
+	HideMode     bool               // hide the build/plan mode badge and info row
+	HeaderInfo   func() string      // extra text shown before the model name in the header
+	InfoRows     func() [][2]string // replaces the sidebar's built-in mode/model rows
+	FooterHint   string             // replaces the default key-hint footer
+	// OnKey sees every key press before the built-in handling (but not while a
+	// question or form is open). Return true to consume it. It runs on the UI
+	// goroutine: start a goroutine for anything that blocks, e.g. App.Form.
+	OnKey func(key string, app *App) bool
 }

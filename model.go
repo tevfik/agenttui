@@ -118,6 +118,9 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if a.form != nil {
 			return a.handleFormKey(msg)
 		}
+		if a.cfg.OnKey != nil && a.cfg.OnKey(keyStr, a) {
+			return a, nil
+		}
 
 		switch keyStr {
 		case "ctrl+c":
@@ -1152,76 +1155,57 @@ func (a *App) GetTheme() Theme {
 
 func (a *App) renderWelcomeHero(vpW int) string {
 	dim := lipgloss.NewStyle().Foreground(a.cfg.Theme.Muted)
-	sub := lipgloss.NewStyle().Foreground(a.cfg.Theme.SubText)
 	primary := lipgloss.NewStyle().Bold(true).Foreground(a.cfg.Theme.Primary)
 	secondary := lipgloss.NewStyle().Foreground(a.cfg.Theme.Secondary)
 	cmdPill := lipgloss.NewStyle().Bold(true).Foreground(a.cfg.Theme.Primary)
 	descStyle := lipgloss.NewStyle().Foreground(a.cfg.Theme.SubText)
+	sub := lipgloss.NewStyle().Foreground(a.cfg.Theme.SubText)
 
 	var sb strings.Builder
 	sb.WriteString("\n")
 
-	asciiBig := []string{
-		"  ██████╗ ███████╗██╗   ██╗██████╗  █████╗ ███╗   ██╗",
-		"  ██╔══██╗██╔════╝██║   ██║██╔══██╗██╔══██╗████╗  ██║",
-		"  ██║  ██║█████╗  ██║   ██║██████╔╝███████║██╔██╗ ██║",
-		"  ██║  ██║██╔══╝  ╚██╗ ██╔╝██╔══██╗██╔══██║██║╚██╗██║",
-		"  ██████╔╝███████╗ ╚████╔╝ ██║  ██║██║  ██║██║ ╚████║",
-		"  ╚═════╝ ╚══════╝  ╚═══╝  ╚═╝  ╚═╝╚═╝  ╚═╝╚═╝  ╚═══╝",
-	}
-
-	asciiMini := []string{
-		"   ___  _______   ______  ___   _  __",
-		"  / _ \\/ __/\\ \\ / / _  / / _ | / |/ /",
-		" / // / _/   \\ V / , _/ / __ |/    / ",
-		"/____/___/    \\_/_/|_| /_/ |_/_/|_/  ",
-	}
-
-	if vpW >= 60 {
-		for _, line := range asciiBig {
-			sb.WriteString(primary.Render(line) + "\n")
+	bannerW := 0
+	for _, l := range a.cfg.Banner {
+		if w := lipgloss.Width(l); w > bannerW {
+			bannerW = w
 		}
-	} else if vpW >= 42 {
-		for _, line := range asciiMini {
+	}
+	if bannerW > 0 && vpW >= bannerW+4 {
+		for _, line := range a.cfg.Banner {
 			sb.WriteString(primary.Render(line) + "\n")
 		}
 	} else {
-		sb.WriteString(primary.Render("  [ "+strings.ToUpper(a.cfg.Title)+" ]") + "\n")
+		sb.WriteString("  " + primary.Render(a.cfg.Title) + "\n")
 	}
 
 	sb.WriteString("\n")
-	sb.WriteString("  " + secondary.Render("Autonomous Software Engineering Agent") + "\n")
+	if a.cfg.Subtitle != "" {
+		sb.WriteString("  " + secondary.Render(a.cfg.Subtitle) + "\n")
+	}
 
-	meta := fmt.Sprintf("  Model: %s", a.modelName)
+	var meta []string
+	if a.modelName != "" {
+		meta = append(meta, "Model: "+a.modelName)
+	}
 	if a.workDir != "" {
 		wd := a.workDir
 		if home, err := os.UserHomeDir(); err == nil && strings.HasPrefix(wd, home) {
 			wd = "~" + wd[len(home):]
 		}
-		meta += fmt.Sprintf("  ·  Workspace: %s", wd)
+		meta = append(meta, "Workspace: "+wd)
 	}
-	sb.WriteString(dim.Render(meta) + "\n\n")
-
-	sb.WriteString("  " + sub.Render("Quick Actions:") + "\n")
-	shortcuts := []struct {
-		cmd  string
-		desc string
-	}{
-		{"/plan", "Formulate implementation plan"},
-		{"/search", "Semantic & AST code search via Gleann"},
-		{"/review", "Multi-agent review working changes"},
-		{"/test", "Run project test suite & verify fixes"},
-		{"/theme", "Switch UI theme"},
-		{"/help", "List all slash commands & shortcuts"},
+	if len(meta) > 0 {
+		sb.WriteString(dim.Render("  "+strings.Join(meta, "  ·  ")) + "\n")
 	}
-
-	for _, s := range shortcuts {
-		pill := cmdPill.Render(fmt.Sprintf("  %-8s", s.cmd))
-		desc := descStyle.Render(s.desc)
-		sb.WriteString(pill + " " + desc + "\n")
-	}
-
 	sb.WriteString("\n")
+
+	if len(a.cfg.QuickActions) > 0 {
+		sb.WriteString("  " + sub.Render("Quick Actions:") + "\n")
+		for _, q := range a.cfg.QuickActions {
+			sb.WriteString(cmdPill.Render(fmt.Sprintf("  %-10s", q.Cmd)) + " " + descStyle.Render(q.Desc) + "\n")
+		}
+		sb.WriteString("\n")
+	}
 	sb.WriteString(dim.Render("  Tip: Type / for command autocomplete · Tab to complete · ↑/↓ history") + "\n")
 
 	return sb.String()
@@ -1832,26 +1816,38 @@ func (a *App) renderSidebar(w, h int) string {
 	lines = append(lines, dim.Render("─── info ───"))
 	lines = append(lines, "")
 
-	// Mode
-	modeColor := a.cfg.Theme.Primary
-	if a.mode == "build" {
-		modeColor = a.cfg.Theme.Accent
-	}
-	lines = append(lines, label.Render("mode"))
-	lines = append(lines, lipgloss.NewStyle().Bold(true).Foreground(modeColor).Render(strings.ToUpper(a.mode)))
-	lines = append(lines, "")
+	if a.cfg.InfoRows != nil {
+		for _, row := range a.cfg.InfoRows() {
+			lines = append(lines, label.Render(row[0]))
+			v := row[1]
+			if w > 4 && lipgloss.Width(v) > w-4 {
+				v = string([]rune(v)[:w-5]) + "…"
+			}
+			lines = append(lines, val.Render(v))
+			lines = append(lines, "")
+		}
+	} else {
+		if !a.cfg.HideMode {
+			modeColor := a.cfg.Theme.Primary
+			if a.mode == "build" {
+				modeColor = a.cfg.Theme.Accent
+			}
+			lines = append(lines, label.Render("mode"))
+			lines = append(lines, lipgloss.NewStyle().Bold(true).Foreground(modeColor).Render(strings.ToUpper(a.mode)))
+			lines = append(lines, "")
+		}
 
-	// Model
-	lines = append(lines, label.Render("model"))
-	modelDisp := a.modelName
-	if modelDisp == "" {
-		modelDisp = "?"
+		lines = append(lines, label.Render("model"))
+		modelDisp := a.modelName
+		if modelDisp == "" {
+			modelDisp = "?"
+		}
+		if len(modelDisp) > w-4 {
+			modelDisp = modelDisp[:w-7] + "…"
+		}
+		lines = append(lines, val.Render(modelDisp))
+		lines = append(lines, "")
 	}
-	if len(modelDisp) > w-4 {
-		modelDisp = modelDisp[:w-7] + "…"
-	}
-	lines = append(lines, val.Render(modelDisp))
-	lines = append(lines, "")
 
 	// Context Window
 	lines = append(lines, label.Render("context"))
@@ -1965,8 +1961,10 @@ func (a *App) View() tea.View {
 		if a.mode == "build" {
 			modeColor = a.cfg.Theme.Accent
 		}
-		modeBadge := lipgloss.NewStyle().Bold(true).Foreground(modeColor).Render("[" + strings.ToUpper(a.mode) + "]")
-		left := title + " " + modeBadge
+		left := title
+		if !a.cfg.HideMode {
+			left += " " + lipgloss.NewStyle().Bold(true).Foreground(modeColor).Render("["+strings.ToUpper(a.mode)+"]")
+		}
 
 		if a.workDir != "" {
 			wd := a.workDir
@@ -1981,6 +1979,11 @@ func (a *App) View() tea.View {
 		}
 
 		right := dim.Render(a.modelName)
+		if a.cfg.HeaderInfo != nil {
+			if info := a.cfg.HeaderInfo(); info != "" {
+				right = dim.Render(info + " · " + a.modelName)
+			}
+		}
 		sidebarW := a.sidebarWidth()
 		if sidebarW == 0 && a.width >= 60 {
 			right += " " + a.renderTokenBar(8)
@@ -2063,7 +2066,11 @@ func (a *App) View() tea.View {
 			}
 			foot = " " + left + strings.Repeat(" ", gap) + right
 		} else {
-			foot = dim.Render(" Enter send · / commands · Ctrl+T thinking · " + sidebarHint() + " sidebar · Ctrl+Y copy · ↑↓ history · Ctrl+C quit")
+			hint := " Enter send · / commands · Ctrl+T thinking · " + sidebarHint() + " sidebar · Ctrl+Y copy · ↑↓ history · Ctrl+C quit"
+			if a.cfg.FooterHint != "" {
+				hint = " " + a.cfg.FooterHint
+			}
+			foot = dim.Render(hint)
 		}
 		bottomLines = append(bottomLines, foot)
 	}

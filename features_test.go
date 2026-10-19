@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	uv "github.com/charmbracelet/ultraviolet"
+	"github.com/charmbracelet/x/ansi"
 	"os"
 	"path/filepath"
 	"strings"
@@ -344,4 +345,35 @@ func TestAsk_LongListIsWindowed(t *testing.T) {
 	joined := strings.Join(a.renderAsk(), "\n")
 	assert.Contains(t, joined, "item-15")
 	assert.Contains(t, joined, "more")
+}
+
+func TestPresentationHooks(t *testing.T) {
+	var keys []string
+	a := New(Config{
+		Theme: DefaultTheme(), Title: "gleann", ModelName: "m1", ShowHeader: true, ShowFooter: true,
+		HideMode:   true,
+		HeaderInfo: func() string { return "idx=docs" },
+		InfoRows:   func() [][2]string { return [][2]string{{"index", "docs"}, {"mode", "RAG"}} },
+		FooterHint: "Ctrl+S settings · Enter send",
+		Banner:     []string{"## BANNER ##"},
+		OnKey:      func(k string, _ *App) bool { keys = append(keys, k); return k == "ctrl+s" },
+	})
+	a.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	a.initDone = true
+	view := ansi.Strip(a.View().Content)
+
+	assert.NotContains(t, view, "[BUILD]")
+	assert.Contains(t, view, "idx=docs")
+	assert.Contains(t, view, "index")
+	assert.Contains(t, view, "RAG")
+	assert.Contains(t, view, "Ctrl+S settings")
+	assert.NotContains(t, view, "Ctrl+B")
+	assert.Contains(t, view, "## BANNER ##")
+
+	a.textarea.SetValue("x")
+	a.Update(tea.KeyPressMsg{Code: 's', Mod: tea.ModCtrl})
+	assert.Equal(t, []string{"ctrl+s"}, keys)
+	assert.Equal(t, "x", a.textarea.Value(), "consumed key must not reach the input")
+	a.Update(tea.KeyPressMsg{Code: 'a', Text: "a"})
+	assert.Equal(t, "xa", a.textarea.Value())
 }

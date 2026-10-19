@@ -245,14 +245,23 @@ func TestApp_ThemesAndResponsiveScaling(t *testing.T) {
 
 	// 3. Welcome hero banner rendering
 	app := New(Config{
-		Theme:     claude,
-		ModelName: "test-model",
+		Theme:        claude,
+		ModelName:    "test-model",
+		Subtitle:     "Autonomous Software Engineering Agent",
+		QuickActions: []QuickAction{{"/plan", "Make a plan"}, {"/search", "Search code"}},
 	})
 	app.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
 	rendered := app.renderMessages()
 	assert.Contains(t, rendered, "Autonomous Software Engineering Agent")
 	assert.Contains(t, rendered, "/plan")
 	assert.Contains(t, rendered, "/search")
+
+	// Without configuration the welcome screen carries no product-specific text.
+	plain := New(Config{Theme: claude, ModelName: "m"})
+	plain.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	out := plain.renderMessages()
+	assert.NotContains(t, out, "/plan")
+	assert.NotContains(t, strings.ToLower(out), "devran")
 }
 
 func TestApp_NonLocalSlashCommandStartsStream(t *testing.T) {
