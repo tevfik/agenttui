@@ -5,10 +5,12 @@ import (
 	"fmt"
 	uv "github.com/charmbracelet/ultraviolet"
 	"github.com/charmbracelet/x/ansi"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/stretchr/testify/assert"
@@ -391,4 +393,41 @@ func TestSubmit_RunsSlashCommandLikeTyping(t *testing.T) {
 
 	_, cmd = a.Update(submitMsg{"/ping"})
 	assert.Nil(t, cmd, "submit is ignored while a turn is running")
+}
+
+// Regression: Submit called from OnKey (i.e. on the UI goroutine) used to
+// deadlock the whole program because Program.Send blocks on the event loop.
+func TestSubmit_FromOnKeyDoesNotDeadlock(t *testing.T) {
+	ran := make(chan struct{}, 1)
+	var app *App
+	app = New(Config{
+		Theme: DefaultTheme(),
+		Commands: []SlashCommand{{Name: "ping", Handler: func(ctx context.Context, args []string, a *App) (string, bool, error) {
+			ran <- struct{}{}
+			return "pong", true, nil
+		}}},
+		OnKey: func(k string, a *App) bool {
+			if k == "ctrl+s" {
+				a.Submit("/ping")
+				return true
+			}
+			return false
+		},
+	})
+	r, w := io.Pipe()
+	p := tea.NewProgram(app, tea.WithInput(r), tea.WithOutput(io.Discard), tea.WithWindowSize(100, 30))
+	app.mu.Lock()
+	app.program = p
+	app.mu.Unlock()
+	done := make(chan struct{})
+	go func() { _, _ = p.Run(); close(done) }()
+	defer func() { p.Quit(); w.Close(); <-done }()
+
+	time.Sleep(1200 * time.Millisecond) // wait for initDone
+	_, _ = w.Write([]byte{0x13})        // Ctrl+S
+	select {
+	case <-ran:
+	case <-time.After(3 * time.Second):
+		t.Fatal("Submit from OnKey deadlocked the program")
+	}
 }

@@ -215,7 +215,9 @@ func (a *App) Submit(input string) {
 	p := a.program
 	a.mu.RUnlock()
 	if p != nil {
-		p.Send(submitMsg{input})
+		// Send blocks until the event loop receives the message; calling it
+		// from a key handler (on the loop itself) would deadlock.
+		go p.Send(submitMsg{input})
 	}
 }
 
