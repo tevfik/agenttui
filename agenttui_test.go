@@ -881,3 +881,42 @@ func TestApp_ExpandFileReferences_RejectsPathsOutsideWorkDir(t *testing.T) {
 	out := app.expandFileReferences("read @ok.txt and @" + filepath.Join(work, "ok.txt"))
 	assert.Contains(t, out, "inside")
 }
+
+func TestApp_TokenBarUnknownWindow(t *testing.T) {
+	app := New(Config{Theme: DefaultTheme()})
+	assert.Contains(t, app.renderTokenBar(10), "0.0k tok")
+	assert.NotContains(t, app.renderTokenBar(10), "128")
+	app.SetContextTokens(2500, 0)
+	bar := app.renderTokenBar(10)
+	assert.Contains(t, bar, "2.5k tok")
+	assert.NotContains(t, bar, "128")
+	app.SetContextTokens(2500, 8000)
+	assert.Contains(t, app.renderTokenBar(10), "2.5k/8k")
+	app.SetContextTokens(2500, 0)
+	assert.NotContains(t, app.renderTokenBar(10), "8k", "an unknown window must not keep the previous one")
+}
+
+type stubWidget struct{}
+
+func (stubWidget) Title() string                    { return "stub" }
+func (stubWidget) Render(w, h int) string           { return "WIDGET-BODY" }
+func (stubWidget) Update(tea.Msg) (Widget, tea.Cmd) { return stubWidget{}, nil }
+func (stubWidget) Visible() bool                    { return true }
+
+func TestApp_SidebarFirstKeepsWidgetOnShortTerminal(t *testing.T) {
+	rows := func() [][2]string {
+		var r [][2]string
+		for i := 0; i < 12; i++ {
+			r = append(r, [2]string{"k", "v"})
+		}
+		return r
+	}
+	for _, first := range []bool{false, true} {
+		app := New(Config{Theme: DefaultTheme(), ShowHeader: true, ShowFooter: true, InfoRows: rows, Sidebar: stubWidget{}, SidebarFirst: first})
+		app.Update(tea.WindowSizeMsg{Width: 150, Height: 36})
+		has := strings.Contains(ansi.Strip(app.View().Content), "WIDGET-BODY")
+		if has != first {
+			t.Errorf("SidebarFirst=%v: widget visible=%v", first, has)
+		}
+	}
+}

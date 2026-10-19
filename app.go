@@ -287,14 +287,13 @@ func (a *App) Mode() string {
 	return a.mode
 }
 
-// SetContextTokens updates the context window usage indicator.
+// SetContextTokens updates the context window usage indicator. max 0 means the
+// window is unknown: only the used count is shown.
 func (a *App) SetContextTokens(used, max int) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.contextUsed = used
-	if max > 0 {
-		a.contextMax = max
-	}
+	a.contextMax = max
 }
 
 // SetRepoFiles sets the cached list of workspace files for @file completion.

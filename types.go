@@ -135,6 +135,10 @@ type Config struct {
 	IgnoreDirs   []string // extra directory names skipped by @file completion
 	Commands     []SlashCommand
 	Sidebar      Widget
+	// SidebarFirst draws the Sidebar widget right under the info rows instead of
+	// below the context/turns/status block, so it stays visible on short terminals;
+	// info rows are then drawn compactly, one line each.
+	SidebarFirst bool
 	EnableMouse  bool
 	ShowHeader   bool
 	ShowFooter   bool

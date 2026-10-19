@@ -798,7 +798,8 @@ func (a *App) renderTokenBar(barW int) string {
 	}
 	max := a.contextMax
 	if max == 0 {
-		max = 128000
+		// Window unknown: show usage only rather than a made-up budget.
+		return fmt.Sprintf("%.1fk tok", float64(used)/1000.0)
 	}
 
 	pct := float64(used) / float64(max)
@@ -1855,6 +1856,15 @@ func (a *App) renderSidebar(w, h int) string {
 
 	if a.cfg.InfoRows != nil {
 		for _, row := range a.cfg.InfoRows() {
+			if a.cfg.SidebarFirst {
+				// Compact: one "label value" line per row, to leave room for the widget.
+				v := row[1]
+				if room := w - 4 - lipgloss.Width(row[0]) - 1; room > 1 && lipgloss.Width(v) > room {
+					v = string([]rune(v)[:room-1]) + "…"
+				}
+				lines = append(lines, label.Render(row[0])+" "+val.Render(v))
+				continue
+			}
 			lines = append(lines, label.Render(row[0]))
 			v := row[1]
 			if w > 4 && lipgloss.Width(v) > w-4 {
@@ -1884,6 +1894,26 @@ func (a *App) renderSidebar(w, h int) string {
 		}
 		lines = append(lines, val.Render(modelDisp))
 		lines = append(lines, "")
+	}
+
+	// Attached widget (e.g. Plan Tracker, retrieval panel).
+	appendWidget := func(lines []string, budget int) []string {
+		if a.sidebar == nil || !a.sidebar.Visible() {
+			return lines
+		}
+		lines = append(lines, dim.Render("─ "+a.sidebar.Title()+" ─"))
+		if r := a.sidebar.Render(w-2, budget); r != "" {
+			lines = append(lines, r, "")
+		}
+		return lines
+	}
+	if a.cfg.SidebarFirst {
+		// Keep a few lines for the context gauge below the widget.
+		budget := h - len(lines) - 6
+		if budget < 6 {
+			budget = 6
+		}
+		lines = appendWidget(lines, budget)
 	}
 
 	// Context Window
@@ -1944,13 +1974,8 @@ func (a *App) renderSidebar(w, h int) string {
 		lines = append(lines, "")
 	}
 
-	// Attached Widget (e.g. Plan Tracker)
-	if a.sidebar != nil && a.sidebar.Visible() {
-		lines = append(lines, dim.Render("─ "+a.sidebar.Title()+" ─"))
-		sideRender := a.sidebar.Render(w-2, h/2)
-		if sideRender != "" {
-			lines = append(lines, sideRender)
-		}
+	if !a.cfg.SidebarFirst {
+		lines = appendWidget(lines, h/2)
 	}
 
 	for len(lines) < h {
