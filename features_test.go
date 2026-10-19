@@ -541,3 +541,12 @@ func TestMentions_CompleteAndResolve(t *testing.T) {
 	assert.Contains(t, out, "func Handler() {}")
 	assert.NotContains(t, out, `name="unknown"`)
 }
+
+func TestAtCompletionPopupIsRendered(t *testing.T) {
+	a := newSizedApp(Config{ShowFooter: true})
+	a.SetRepoFiles([]string{"README.md", "docs/guide.md"})
+	a.textarea.SetValue("see @read")
+	a.updateAutocomplete()
+	require.True(t, a.autoActive)
+	assert.Contains(t, ansi.Strip(a.View().Content), "@README.md")
+}

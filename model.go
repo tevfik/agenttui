@@ -2075,7 +2075,7 @@ func (a *App) View() tea.View {
 		bottomLines = append(bottomLines, a.renderForm()...)
 	} else if a.ask != nil {
 		bottomLines = append(bottomLines, a.renderAsk()...)
-	} else if a.autoActive && len(a.autoFiltered) > 0 {
+	} else if a.autoActive && (len(a.autoFiltered) > 0 || len(a.autoAtFiles) > 0) {
 		popup := a.renderAutocomplete()
 		bottomLines = append(bottomLines, strings.Split(popup, "\n")...)
 	}
