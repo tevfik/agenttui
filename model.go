@@ -18,6 +18,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/glamour"
+	uv "github.com/charmbracelet/ultraviolet"
 	"github.com/charmbracelet/x/ansi"
 )
 
@@ -43,6 +44,14 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.width = msg.Width
 		a.height = msg.Height
 		a.recalcLayout()
+		return a, nil
+
+	case uv.UnknownCsiEvent:
+		// Older screen/tmux terminfo sends Ctrl+arrows as ESC[5D / ESC[5C,
+		// which the input decoder does not recognise. Translate them.
+		if k, ok := legacyCtrlArrow(string(msg)); ok {
+			return a.Update(k)
+		}
 		return a, nil
 
 	case initDoneMsg:
@@ -136,7 +145,9 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "ctrl+t":
 			return a.toggleThinking()
 
-		case "ctrl+b":
+		case "ctrl+b", "f2":
+			// Ctrl+B is tmux's default prefix and never reaches the app there;
+			// F2 is the multiplexer-safe alternative.
 			return a.ToggleSidebar()
 
 		case "ctrl+z":
@@ -2034,7 +2045,7 @@ func (a *App) View() tea.View {
 			}
 			foot = " " + left + strings.Repeat(" ", gap) + right
 		} else {
-			foot = dim.Render(" Enter send · / commands · Ctrl+T thinking · Ctrl+B sidebar · Ctrl+Y copy · ↑↓ history · Ctrl+C quit")
+			foot = dim.Render(" Enter send · / commands · Ctrl+T thinking · " + sidebarHint() + " sidebar · Ctrl+Y copy · ↑↓ history · Ctrl+C quit")
 		}
 		bottomLines = append(bottomLines, foot)
 	}
@@ -2124,4 +2135,28 @@ func (a *App) View() tea.View {
 		v.MouseMode = tea.MouseModeCellMotion
 	}
 	return v
+}
+
+// legacyCtrlArrow maps the ESC[5C/ESC[5D forms of Ctrl+→/← to key presses.
+func legacyCtrlArrow(seq string) (tea.KeyPressMsg, bool) {
+	switch seq {
+	case "\x1b[5D":
+		return tea.KeyPressMsg{Code: tea.KeyLeft, Mod: tea.ModCtrl}, true
+	case "\x1b[5C":
+		return tea.KeyPressMsg{Code: tea.KeyRight, Mod: tea.ModCtrl}, true
+	}
+	return tea.KeyPressMsg{}, false
+}
+
+// inMultiplexer reports whether the process runs inside tmux or GNU screen.
+func inMultiplexer() bool {
+	return os.Getenv("TMUX") != "" || os.Getenv("STY") != ""
+}
+
+// sidebarHint names the sidebar shortcut that actually works in this terminal.
+func sidebarHint() string {
+	if inMultiplexer() {
+		return "F2"
+	}
+	return "Ctrl+B"
 }

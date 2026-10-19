@@ -118,3 +118,17 @@ app := agenttui.New(agenttui.Config{
 ```
 
 `Ask` returns `ErrAskCancelled` on Esc/Ctrl+C and `ErrNotRunning` before `Run`. Implement `Store` to persist the transcript between runs.
+
+## Keyboard shortcuts & tmux
+
+| Keys | Action |
+|---|---|
+| Ctrl+←/→ (or Alt+←/→) | move by word |
+| Ctrl+Backspace / Alt+Backspace / Ctrl+W | delete word backward |
+| Ctrl+Delete / Alt+D | delete word forward |
+| Home/End, Ctrl+A/E | line start / end |
+| Ctrl+Home/End | input start / end |
+| Ctrl+U / Ctrl+K | delete to line start / end |
+| Ctrl+B or F2 | toggle sidebar |
+
+Works inside tmux/screen without touching their configuration: legacy `ESC[5D`/`ESC[5C` Ctrl+arrow sequences are translated, and the footer shows **F2** instead of Ctrl+B there (Ctrl+B is tmux's prefix). Limits that only the multiplexer config can lift: without tmux's `extended-keys`, Ctrl+Backspace is indistinguishable from Backspace — use Alt+Backspace or Ctrl+W; and tmux's default `escape-time` delays a lone Esc.

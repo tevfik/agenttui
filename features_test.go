@@ -2,6 +2,7 @@ package agenttui
 
 import (
 	"context"
+	uv "github.com/charmbracelet/ultraviolet"
 	"os"
 	"path/filepath"
 	"testing"
@@ -236,4 +237,32 @@ func TestEditorKeys_WordNavigationAndDelete(t *testing.T) {
 	assert.Equal(t, 0, a.textarea.Column())
 	a.Update(tea.KeyPressMsg{Code: tea.KeyEnd})
 	assert.Equal(t, 7, a.textarea.Column())
+}
+
+func TestTmux_LegacyCtrlArrowSequences(t *testing.T) {
+	a := newSizedApp(Config{})
+	a.textarea.SetValue("one two three")
+	a.textarea.CursorEnd()
+
+	a.Update(uv.UnknownCsiEvent("\x1b[5D"))
+	assert.Equal(t, 8, a.textarea.Column())
+	a.Update(uv.UnknownCsiEvent("\x1b[5D"))
+	assert.Equal(t, 4, a.textarea.Column())
+	a.Update(uv.UnknownCsiEvent("\x1b[5C"))
+	assert.Equal(t, 7, a.textarea.Column())
+	a.Update(uv.UnknownCsiEvent("\x1b[9Z")) // unrelated sequences are ignored
+	assert.Equal(t, 7, a.textarea.Column())
+}
+
+func TestTmux_SidebarF2AndHint(t *testing.T) {
+	t.Setenv("TMUX", "/tmp/tmux-1000/default,1,0")
+	assert.Equal(t, "F2", sidebarHint())
+	a := newSizedApp(Config{ShowFooter: true, Sidebar: &mockWidget{visible: true}})
+	before := a.IsSidebarHidden()
+	a.Update(tea.KeyPressMsg{Code: tea.KeyF2})
+	assert.NotEqual(t, before, a.IsSidebarHidden())
+
+	t.Setenv("TMUX", "")
+	t.Setenv("STY", "")
+	assert.Equal(t, "Ctrl+B", sidebarHint())
 }
