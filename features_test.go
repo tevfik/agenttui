@@ -2,9 +2,11 @@ package agenttui
 
 import (
 	"context"
+	"fmt"
 	uv "github.com/charmbracelet/ultraviolet"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
@@ -265,4 +267,81 @@ func TestTmux_SidebarF2AndHint(t *testing.T) {
 	t.Setenv("TMUX", "")
 	t.Setenv("STY", "")
 	assert.Equal(t, "Ctrl+B", sidebarHint())
+}
+
+func openTestForm(a *App, f Form) *formState {
+	st := &formState{id: 1, f: f, reply: make(chan formReply, 1)}
+	a.Update(formOpenMsg{st})
+	return st
+}
+
+func TestForm_NotRunning(t *testing.T) {
+	a := newSizedApp(Config{})
+	_, err := a.Form(context.Background(), Form{Title: "x", Fields: []Field{{Label: "a"}}})
+	assert.ErrorIs(t, err, ErrNotRunning)
+}
+
+func TestForm_EditFieldsAndSave(t *testing.T) {
+	a := newSizedApp(Config{})
+	st := openTestForm(a, Form{Title: "Settings", Fields: []Field{
+		{Label: "Model", Kind: FieldChoice, Value: "a", Options: []string{"a", "b", "c"}},
+		{Label: "Temp", Kind: FieldNumber, Value: "0.7", Min: 0, Max: 1, Step: 0.1},
+		{Label: "Rerank", Kind: FieldBool, Value: "off"},
+		{Label: "Prompt", Kind: FieldText, Value: "old"},
+	}})
+	require.NotNil(t, a.form)
+	assert.Contains(t, a.View().Content, "Settings")
+
+	right, left := tea.KeyPressMsg{Code: tea.KeyRight}, tea.KeyPressMsg{Code: tea.KeyLeft}
+	a.Update(right) // Model a -> b
+	a.Update(keyMsg("down"))
+	a.Update(right) // 0.7 -> 0.8
+	a.Update(right) // 0.9
+	a.Update(right) // 1.0
+	a.Update(right) // clamped at 1
+	a.Update(left)  // 0.9
+	a.Update(keyMsg("down"))
+	a.Update(tea.KeyPressMsg{Code: tea.KeySpace, Text: " "}) // Rerank on
+	a.Update(keyMsg("down"))
+	a.Update(keyMsg("enter")) // start editing text
+	require.True(t, st.editing)
+	a.textarea.SetValue("new prompt")
+	a.Update(keyMsg("enter")) // commit text
+	require.False(t, st.editing)
+	a.Update(tea.KeyPressMsg{Code: tea.KeyUp})
+	a.Update(keyMsg("enter")) // save
+
+	r := <-st.reply
+	require.NoError(t, r.err)
+	assert.Equal(t, []string{"b", "0.9", "on", "new prompt"}, r.values)
+	assert.Nil(t, a.form)
+}
+
+func TestForm_EscCancelsAndEditDiscard(t *testing.T) {
+	a := newSizedApp(Config{})
+	st := openTestForm(a, Form{Title: "S", Fields: []Field{{Label: "P", Kind: FieldText, Value: "keep"}}})
+	a.Update(keyMsg("enter"))
+	a.textarea.SetValue("changed")
+	a.Update(keyMsg("esc")) // discards the edit, form stays open
+	require.NotNil(t, a.form)
+	assert.Equal(t, "keep", st.f.Fields[0].Value)
+	a.Update(keyMsg("esc"))
+	assert.ErrorIs(t, (<-st.reply).err, ErrAskCancelled)
+	assert.Nil(t, a.form)
+}
+
+func TestAsk_LongListIsWindowed(t *testing.T) {
+	a := newSizedApp(Config{})
+	opts := make([]string, 30)
+	for i := range opts {
+		opts[i] = fmt.Sprintf("item-%02d", i)
+	}
+	openTestAsk(a, Question{Text: "Pick", Options: opts})
+	assert.Less(t, len(a.renderAsk()), 14)
+	for i := 0; i < 15; i++ {
+		a.Update(keyMsg("down"))
+	}
+	joined := strings.Join(a.renderAsk(), "\n")
+	assert.Contains(t, joined, "item-15")
+	assert.Contains(t, joined, "more")
 }

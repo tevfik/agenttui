@@ -115,6 +115,9 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if a.ask != nil {
 			return a.handleAskKey(msg)
 		}
+		if a.form != nil {
+			return a.handleFormKey(msg)
+		}
 
 		switch keyStr {
 		case "ctrl+c":
@@ -326,6 +329,16 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case askOpenMsg:
 		a.openAsk(msg.st)
+		return a, nil
+
+	case formOpenMsg:
+		a.openForm(msg.st)
+		return a, nil
+
+	case formCloseMsg:
+		if a.form != nil && a.form.id == msg.id {
+			a.closeForm()
+		}
 		return a, nil
 
 	case askCloseMsg:
@@ -1009,6 +1022,9 @@ func (a *App) chromeHeight() int {
 	}
 	if a.ask != nil {
 		h += len(a.renderAsk())
+	}
+	if a.form != nil {
+		h += len(a.renderForm())
 	}
 	// Textarea is height 3 + top border + bottom border = 5 lines
 	h += 5
@@ -2004,7 +2020,9 @@ func (a *App) View() tea.View {
 		bottomLines = append(bottomLines, " "+indicator)
 	}
 
-	if a.ask != nil {
+	if a.form != nil {
+		bottomLines = append(bottomLines, a.renderForm()...)
+	} else if a.ask != nil {
 		bottomLines = append(bottomLines, a.renderAsk()...)
 	} else if a.autoActive && len(a.autoFiltered) > 0 {
 		popup := a.renderAutocomplete()

@@ -155,12 +155,30 @@ func (a *App) renderAsk() []string {
 		lines = append(lines, "   "+dim.Render(hint+" · Esc dismiss"))
 		return lines
 	}
-	for i, o := range st.q.Options {
+	const maxVisible = 8
+	start, end := 0, len(st.q.Options)
+	if end > maxVisible {
+		start = st.cursor - maxVisible/2
+		if start < 0 {
+			start = 0
+		}
+		if start+maxVisible > end {
+			start = end - maxVisible
+		}
+		end = start + maxVisible
+	}
+	if start > 0 {
+		lines = append(lines, "   "+dim.Render(fmt.Sprintf("  ↑ %d more", start)))
+	}
+	for i := start; i < end; i++ {
 		mark, style := "  ", lipgloss.NewStyle().Foreground(th.SubText)
 		if i == st.cursor {
 			mark, style = "❯ ", lipgloss.NewStyle().Bold(true).Foreground(th.Primary)
 		}
-		lines = append(lines, "   "+style.Render(fmt.Sprintf("%s%d. %s", mark, i+1, o)))
+		lines = append(lines, "   "+style.Render(fmt.Sprintf("%s%d. %s", mark, i+1, st.q.Options[i])))
+	}
+	if end < len(st.q.Options) {
+		lines = append(lines, "   "+dim.Render(fmt.Sprintf("  ↓ %d more", len(st.q.Options)-end)))
 	}
 	lines = append(lines, "   "+dim.Render("↑/↓ select · Enter confirm · 1-9 quick pick · Esc dismiss"))
 	return lines

@@ -132,3 +132,6 @@ app := agenttui.New(agenttui.Config{
 | Ctrl+B or F2 | toggle sidebar |
 
 Works inside tmux/screen without touching their configuration: legacy `ESC[5D`/`ESC[5C` Ctrl+arrow sequences are translated, and the footer shows **F2** instead of Ctrl+B there (Ctrl+B is tmux's prefix). Limits that only the multiplexer config can lift: without tmux's `extended-keys`, Ctrl+Backspace is indistinguishable from Backspace — use Alt+Backspace or Ctrl+W; and tmux's default `escape-time` delays a lone Esc.
+
+### Settings forms and long pick lists
+`app.Form(ctx, agenttui.Form{Title, Fields})` shows an inline settings panel (choice, number, bool and text fields) and returns the edited values on Enter, or `ErrAskCancelled` on Esc. `Ask` windows long option lists (8 visible, scrolling).

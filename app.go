@@ -99,6 +99,8 @@ type App struct {
 	streamStartTime time.Time
 	streamMu        *sync.Mutex
 	ask             *askState
+	form            *formState
+	editingField    bool
 	askSeq          int
 }
 
