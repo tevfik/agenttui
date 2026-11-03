@@ -62,8 +62,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.textarea.SetValue("")
 		}
 		a.recalcViewport()
-		a.viewport.SetContent(a.renderMessages())
-		a.viewport.GotoBottom()
+		a.syncView()
 		return a, nil
 
 	case notifyExpireMsg:
@@ -78,9 +77,9 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		mouse := msg.Mouse()
 		if mouse.Button == tea.MouseWheelUp {
-			a.viewport.ScrollUp(3)
+			a.scrollBy(-3)
 		} else if mouse.Button == tea.MouseWheelDown {
-			a.viewport.ScrollDown(3)
+			a.scrollBy(3)
 		}
 		return a, nil
 
@@ -119,6 +118,10 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return a.handleFormKey(msg)
 		}
 		if a.cfg.OnKey != nil && a.cfg.OnKey(keyStr, a) {
+			return a, nil
+		}
+
+		if a.handleScrollKey(keyStr) {
 			return a, nil
 		}
 
@@ -163,7 +166,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				}
 			}
 
-		case "ctrl+m":
+		case "ctrl+m", "f3":
 			a.mouseEnabled = !a.mouseEnabled
 			status := "Mouse OFF (select text normally, scroll with PgUp/PgDn)"
 			if a.mouseEnabled {
@@ -172,22 +175,21 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			notifyCmd := a.SetNotification(status, NotifyInfo)
 			return a, notifyCmd
 
-		case "ctrl+y":
-			if !a.streaming && !a.waiting {
-				a.mu.RLock()
-				for i := len(a.messages) - 1; i >= 0; i-- {
-					if a.messages[i].Role == RoleAssistant && a.messages[i].Content != "" {
-						content := a.messages[i].Content
-						a.mu.RUnlock()
-						if copyToClipboard(content) {
-							return a, a.SetNotification("✓ Copied response to clipboard", NotifySuccess)
-						}
-						return a, a.SetNotification("⚠ Clipboard not available", NotifyWarning)
-					}
-				}
-				a.mu.RUnlock()
+		case "ctrl+y", "alt+y":
+			// Ctrl+Y: raw markdown of the latest answer (the partial one while
+			// it is still streaming). Alt+Y: only its fenced code blocks.
+			text, ok := a.copySource()
+			if !ok {
+				return a, a.SetNotification("Nothing to copy yet", NotifyInfo)
 			}
-			return a, nil
+			what := "response"
+			if keyStr == "alt+y" {
+				if !hasCodeFence(text) {
+					return a, a.SetNotification("No code block in the latest response", NotifyInfo)
+				}
+				text, what = ExtractCodeBlocks(text), "code blocks"
+			}
+			return a, a.copyAndNotify(text, what)
 
 		case "up":
 			count := len(a.autoFiltered)
@@ -286,6 +288,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					a.recalcViewport()
 					return a, nil
 				}
+				a.followBottom()
 				cmd := a.handleSubmit(cmdStr)
 				a.recalcViewport()
 				return a, cmd
@@ -306,6 +309,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return a, nil
 				}
 
+				a.followBottom()
 				cmd := a.handleSubmit(val)
 				a.recalcViewport()
 				if cmd != nil {
@@ -341,6 +345,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if a.streaming {
 				a.cancelStream("interrupted")
 			}
+			a.followBottom()
 			cmd := a.handleSubmit(val)
 			a.recalcViewport()
 			return a, cmd
@@ -355,13 +360,6 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.textarea.InsertString("\n")
 			return a, nil
 
-		case "pgup":
-			a.viewport.ScrollUp(6)
-			return a, nil
-
-		case "pgdown", "ctrl+f":
-			a.viewport.ScrollDown(6)
-			return a, nil
 		}
 
 	case askOpenMsg:
@@ -405,8 +403,8 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.streamChunkCount++
 		a.streamMu.Unlock()
 
-		a.viewport.SetContent(a.renderMessagesfast())
-		a.viewport.GotoBottom()
+		a.streamDirty = true
+		a.renderStreamIfDue()
 		return a, waitForStream(a.streamCh, a.streamGen)
 
 	case streamEventMsg:
@@ -423,8 +421,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			a.pendingSources = append(a.pendingSources, msg.ev.Sources...)
 		}
 		a.cacheCount = 0
-		a.viewport.SetContent(a.renderMessages())
-		a.viewport.GotoBottom()
+		a.syncView()
 		return a, waitForStream(a.streamCh, a.streamGen)
 
 	case streamDoneMsg:
@@ -485,8 +482,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.saveSession()
 		a.cacheCount = 0 // force rebuild cache
 		a.recalcViewport()
-		a.viewport.SetContent(a.renderMessages())
-		a.viewport.GotoBottom()
+		a.syncView()
 		cmds = append(cmds, a.drainQueue())
 		return a, tea.Batch(cmds...)
 
@@ -494,8 +490,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.streaming = false
 		a.waiting = false
 		a.recalcViewport()
-		a.viewport.SetContent(a.renderMessages())
-		a.viewport.GotoBottom()
+		a.syncView()
 		return a, a.drainQueue()
 
 	case slashDoneMsg:
@@ -508,21 +503,22 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				// that needs to be sent to the LLM for streaming answer!
 				a.cacheCount = 0
 				a.recalcViewport()
-				a.viewport.SetContent(a.renderMessages())
-				a.viewport.GotoBottom()
+				a.syncView()
 				return a, a.startStreamPrompt(msg.out)
 			}
 			a.AddMessage(Message{Role: RoleSystem, Content: msg.out})
 		}
 		a.cacheCount = 0
 		a.recalcViewport()
-		a.viewport.SetContent(a.renderMessages())
-		a.viewport.GotoBottom()
+		a.syncView()
 		return a, a.drainQueue()
 
 	case spinner.TickMsg:
 		// Only tick when actively streaming or waiting! Prevents runaway loops.
 		if a.waiting || a.streaming {
+			if a.streaming {
+				a.renderStreamIfDue() // flush chunks held back by the throttle
+			}
 			var cmd tea.Cmd
 			a.spinner, cmd = a.spinner.Update(msg)
 			cmds = append(cmds, cmd)
@@ -599,8 +595,7 @@ func (a *App) cancelStreamAndQueue() {
 		a.AddMessage(Message{Role: RoleSystem, Content: fmt.Sprintf("_(%d queued message(s) discarded)_", n)})
 		a.cacheCount = 0
 		a.recalcViewport()
-		a.viewport.SetContent(a.renderMessages())
-		a.viewport.GotoBottom()
+		a.syncView()
 	}
 }
 
@@ -625,8 +620,7 @@ func (a *App) cancelStream(label string) {
 	}
 	a.cacheCount = 0
 	a.recalcViewport()
-	a.viewport.SetContent(a.renderMessages())
-	a.viewport.GotoBottom()
+	a.syncView()
 }
 
 // renderQueueLines is the "queued" indicator shown above the input.
@@ -657,8 +651,7 @@ func (a *App) handleSubmit(input string) tea.Cmd {
 			a.AddMessage(Message{Role: RoleUser, Content: input})
 			a.waiting = true
 			a.cacheCount = 0
-			a.viewport.SetContent(a.renderMessages())
-			a.viewport.GotoBottom()
+			a.syncView()
 
 			return tea.Batch(a.spinner.Tick, func() tea.Msg {
 				out, err := runShellCommand(a.workDir, cmdStr)
@@ -687,8 +680,7 @@ func (a *App) handleSubmit(input string) tea.Cmd {
 				a.AddMessage(Message{Role: RoleUser, Content: input})
 				a.waiting = true
 				a.cacheCount = 0
-				a.viewport.SetContent(a.renderMessages())
-				a.viewport.GotoBottom()
+				a.syncView()
 
 				cmdCopy := cmd
 				argsCopy := args
@@ -710,8 +702,7 @@ func (a *App) handleSubmit(input string) tea.Cmd {
 					Timestamp: time.Now(),
 				})
 				a.cacheCount = 0
-				a.viewport.SetContent(a.renderMessages())
-				a.viewport.GotoBottom()
+				a.syncView()
 				return nil
 			}
 		}
@@ -720,8 +711,7 @@ func (a *App) handleSubmit(input string) tea.Cmd {
 	// 3. Normal streaming chat prompt
 	a.AddMessage(Message{Role: RoleUser, Content: input})
 	a.cacheCount = 0
-	a.viewport.SetContent(a.renderMessages())
-	a.viewport.GotoBottom()
+	a.syncView()
 
 	expanded := a.expandFileReferences(input)
 	return a.startStreamPrompt(expanded)
@@ -855,6 +845,7 @@ func (a *App) startStreamPrompt(prompt string) tea.Cmd {
 	}
 
 	a.streaming = true
+	a.streamDirty, a.streamDrawGap = false, 0
 	a.pendingSources = nil
 	a.waiting = false
 	a.streamChunkCount = 0
@@ -1244,6 +1235,7 @@ func (a *App) recalcViewport() {
 
 	a.viewport.SetWidth(vpW - 1)
 	a.viewport.SetHeight(vpH)
+	a.keepFollow()
 	taWidth := vpW - 2
 	if taWidth < 20 {
 		taWidth = 20
@@ -1255,6 +1247,7 @@ func (a *App) recalcLayout() {
 	if a.width == 0 || a.height == 0 {
 		return
 	}
+	oldOff, oldTotal := a.viewport.YOffset(), a.viewport.TotalLineCount()
 
 	sidebarW := a.sidebarWidth()
 	vpW := a.width
@@ -1297,8 +1290,24 @@ func (a *App) recalcLayout() {
 		a.renderedCache = ""
 	}
 
+	a.reflow(oldOff, oldTotal)
+}
+
+// reflow re-renders after a layout change. In follow mode the view stays at the
+// bottom; otherwise the scroll position is kept proportionally, since
+// re-wrapping changes the number of lines.
+func (a *App) reflow(oldOff, oldTotal int) {
 	a.viewport.SetContent(a.renderMessages())
-	a.viewport.GotoBottom()
+	if !a.scrollAway {
+		a.viewport.GotoBottom()
+		return
+	}
+	off := oldOff
+	if total := a.viewport.TotalLineCount(); oldTotal > 0 && total != oldTotal {
+		off = int(float64(oldOff)*float64(total)/float64(oldTotal) + 0.5)
+	}
+	a.viewport.SetYOffset(off)
+	a.afterScroll()
 }
 
 // SetTheme dynamically updates the theme and refreshes the UI.
@@ -1449,7 +1458,9 @@ func (a *App) renderMarkdown(content string) string {
 	if a.renderer != nil {
 		rendered, err := a.renderer.Render(content)
 		if err == nil {
-			return strings.TrimRight(rendered, "\n")
+			// code blocks and tables are not wrapped by glamour; wrap them
+			// here instead of letting the viewport cut them off.
+			return hardWrapLines(strings.TrimRight(rendered, "\n"), max(vpW-3, 20))
 		}
 	}
 	return content
@@ -1605,7 +1616,7 @@ func (a *App) renderUserCard(content string, ts time.Time) string {
 	if strings.ContainsAny(content, "#*`_~[]\n") {
 		bodyText = a.renderMarkdown(content)
 	} else {
-		bodyText = lipgloss.NewStyle().Foreground(a.cfg.Theme.Text).Render(content)
+		bodyText = lipgloss.NewStyle().Foreground(a.cfg.Theme.Text).Render(hardWrapLines(ansi.Wrap(content, max(maxW-4, 20), ""), max(maxW-4, 20)))
 	}
 
 	return banner + "\n\n" + bodyText
@@ -1616,7 +1627,8 @@ func (a *App) renderErrorCard(content string, ts time.Time) string {
 	errStyle := lipgloss.NewStyle().Bold(true).Foreground(a.cfg.Theme.Error)
 	tsStyle := lipgloss.NewStyle().Foreground(a.cfg.Theme.Muted)
 	header := errStyle.Render("✗ Error") + tsStyle.Render(" · "+ts.Format("15:04"))
-	return header + "\n" + errStyle.Render(content)
+	w := max(a.viewport.Width()-4, 20)
+	return header + "\n" + errStyle.Render(hardWrapLines(ansi.Wrap(content, w, ""), w))
 }
 
 func (a *App) renderThinkingCard(thinking string, open bool, duration time.Duration) string {
@@ -2312,7 +2324,7 @@ func (a *App) View() tea.View {
 			}
 			foot = " " + left + strings.Repeat(" ", gap) + right
 		} else {
-			hint := " Enter send · / commands · Ctrl+T thinking · " + sidebarHint() + " sidebar · Ctrl+Y copy · ↑↓ history · Ctrl+C quit"
+			hint := " Enter send · / commands · Ctrl+T thinking · " + sidebarHint() + " sidebar · PgUp/PgDn scroll · Ctrl+Y copy · ↑↓ history · Ctrl+C quit"
 			if a.cfg.FooterHint != "" {
 				hint = " " + a.cfg.FooterHint
 			}
@@ -2328,6 +2340,7 @@ func (a *App) View() tea.View {
 	}
 	if a.viewport.Height() != bodyH {
 		a.viewport.SetHeight(bodyH)
+		a.keepFollow()
 	}
 
 	sidebarW := a.sidebarWidth()
@@ -2365,6 +2378,13 @@ func (a *App) View() tea.View {
 		vpWithScroll.WriteString(line + sb + "\n")
 	}
 	vpJoined := strings.TrimRight(vpWithScroll.String(), "\n")
+	if badge := a.scrollBadge(); badge != "" && len(vpLines) > 0 {
+		rows := strings.Split(vpJoined, "\n")
+		last := len(rows) - 1
+		// keep the scrollbar cell (last rune of the row) intact
+		rows[last] = a.overlayBadge(vpLines[last], badge, targetW) + sbLines[min(last, len(sbLines)-1)]
+		vpJoined = strings.Join(rows, "\n")
+	}
 
 	var bodyBlock string
 	if sidebarW > 0 {

@@ -97,6 +97,17 @@ type App struct {
 	// Mouse enabled
 	mouseEnabled bool
 
+	// Scroll: scrollAway = the user left the bottom (no auto-follow);
+	// unseen = content arrived below while away.
+	scrollAway bool
+	unseen     bool
+
+	// Streaming render throttle: re-rendering a long answer is O(size), so
+	// chunks are coalesced to keep CPU use bounded.
+	streamDirty    bool
+	lastStreamDraw time.Time
+	streamDrawGap  time.Duration
+
 	// Session & Mode
 	startTime        time.Time
 	mode             string
@@ -385,7 +396,7 @@ func (a *App) AddMessage(msg Message) {
 	a.mu.Unlock()
 
 	if ready {
-		a.viewport.SetContent(a.renderMessages())
+		a.syncView()
 	}
 }
 
@@ -418,6 +429,7 @@ func (a *App) ClearMessages() {
 	a.cacheCount = 0
 	a.renderedCache = ""
 	if a.ready {
+		a.scrollAway, a.unseen = false, false
 		a.viewport.SetContent(a.renderMessages())
 		a.viewport.GotoTop()
 	}
@@ -442,6 +454,7 @@ func (a *App) ResetSession() {
 	a.cacheCount = 0
 	a.renderedCache = ""
 	if a.ready {
+		a.scrollAway, a.unseen = false, false
 		a.viewport.SetContent(a.renderMessages())
 		a.viewport.GotoTop()
 	}
@@ -500,7 +513,7 @@ func (a *App) RewindLastTurn() (string, bool) {
 
 	if ready {
 		a.viewport.SetContent(a.renderMessages())
-		a.viewport.GotoBottom()
+		a.followBottom()
 	}
 
 	if userPrompt != "" {

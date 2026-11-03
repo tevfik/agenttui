@@ -108,7 +108,7 @@ func (a *App) closeForm() {
 	a.editingField = false
 	a.textarea.Reset()
 	a.recalcViewport()
-	a.viewport.GotoBottom()
+	a.keepFollow()
 }
 
 // handleFormKey processes a key press while a form is open.

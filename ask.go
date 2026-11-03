@@ -132,7 +132,7 @@ func (a *App) openAsk(st *askState) {
 func (a *App) closeAsk() {
 	a.ask = nil
 	a.recalcViewport()
-	a.viewport.GotoBottom()
+	a.keepFollow()
 }
 
 // renderAsk draws the question panel shown in place of the usual status line.

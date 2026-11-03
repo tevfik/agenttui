@@ -91,8 +91,13 @@ func main() {
 | `Shift+Enter` / `Alt+Enter` | Insert new line |
 | `Tab` | Autocomplete selected command or `@file` |
 | `↑` / `↓` | Navigate command popup or browse command history |
-| `Ctrl+Y` | Copy latest assistant response to system clipboard |
-| `Ctrl+M` | Toggle mouse capture (switch between wheel scroll & native terminal selection) |
+| `PgUp` / `PgDn` (`Ctrl+F`) | Scroll the transcript one page. Scrolling up while a response streams pauses auto-follow (a "new content" badge shows on the last row); reaching the bottom again, `End`, or sending a message resumes it |
+| `Home` / `End` | Jump to top / bottom of the transcript when the input box is empty (otherwise they move the cursor). `Ctrl+Home` / `Ctrl+End` always do |
+| `Alt+↑` / `Alt+↓` | Scroll one line. Plain `↑` / `↓` also scroll one line while a response is running and the input is empty |
+| Mouse wheel | Scrolls 3 lines (needs mouse capture, see `Ctrl+M`) |
+| `Ctrl+Y` | Copy the latest assistant response as raw markdown (the partial answer while streaming). Uses xclip/xsel/wl-copy/pbcopy locally and an OSC 52 sequence (also over SSH and inside tmux; needs terminal support and `set -g set-clipboard on` / `allow-passthrough on` in tmux). Texts above ~70 KB are never sent through OSC 52 (terminals truncate them): they go to the local clipboard tool, or are saved to a temp file whose path is shown. The status line reports `Copied N chars` or the failure |
+| `Alt+Y` | Copy only the fenced code blocks of the latest response |
+| `Ctrl+M` / `F3` | Toggle mouse capture (switch between wheel scroll & native terminal selection) |
 | `Enter` while a response is streaming | Queue the message (shown as "queued" above the input); queued messages are sent in order when the response ends. Nothing is cancelled. Slash commands queue too |
 | `Ctrl+X` (or `Ctrl+Enter` where the terminal reports it) | Send now: cut the running response short (the partial answer stays in the transcript marked `_(interrupted)_`), then send the typed text. With an empty input it promotes the first queued message. The rest of the queue is kept |
 | `Ctrl+C` / `Esc` while streaming | Cancel the response (partial kept, marked `_(cancelled)_`) and discard the queued messages (a note says how many; they remain in the up-arrow history) |
