@@ -550,3 +550,24 @@ func TestAtCompletionPopupIsRendered(t *testing.T) {
 	require.True(t, a.autoActive)
 	assert.Contains(t, ansi.Strip(a.View().Content), "@README.md")
 }
+
+func TestSpeedAndTokensMetrics(t *testing.T) {
+	a := newSizedApp(Config{})
+	a.streaming = true
+	a.streamStartTime = time.Now().Add(-500 * time.Millisecond) // 0.5s duration
+	a.streamChunkCount = 20
+	a.Update(streamDoneMsg{tokens: 50})
+
+	assert.Equal(t, 50, a.LastTokens())
+	assert.Greater(t, a.LastTPS(), float64(0))
+
+	rendered := a.renderMessages()
+	assert.Contains(t, rendered, "50 tok")
+	assert.Contains(t, rendered, "tok/s")
+
+	sidebar := a.renderSidebar(30, 30)
+	assert.Contains(t, sidebar, "speed")
+	assert.Contains(t, sidebar, "tok/s")
+	assert.Contains(t, sidebar, "tokens")
+}
+

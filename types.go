@@ -47,6 +47,8 @@ type Message struct {
 	ThinkingTime time.Duration `json:"thinking_time,omitempty"`
 	Timestamp    time.Time     `json:"timestamp"`
 	Tokens       int           `json:"tokens,omitempty"`
+	Duration     time.Duration `json:"duration,omitempty"`
+	TPS          float64       `json:"tps,omitempty"`
 	Sources      []Source      `json:"sources,omitempty"`
 	Tool         *ToolCall     `json:"tool,omitempty"`
 }

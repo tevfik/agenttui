@@ -362,6 +362,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		a.streamMu.Lock()
 		a.streamBuf.WriteString(msg.chunk)
+		a.streamChunkCount++
 		a.streamMu.Unlock()
 
 		a.viewport.SetContent(a.renderMessagesfast())
@@ -399,12 +400,19 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.waiting = false
 		defer func() { a.pendingSources = nil }()
 		a.totalTokens += msg.tokens
+		a.lastTokens = msg.tokens
 		responseTime := time.Since(a.streamStartTime).Truncate(100 * time.Millisecond)
+		a.lastDuration = responseTime
+		if responseTime.Seconds() > 0 && msg.tokens > 0 {
+			a.lastTPS = float64(msg.tokens) / responseTime.Seconds()
+		} else {
+			a.lastTPS = 0
+		}
 
 		if msg.err != nil {
 			if finalContent != "" {
 				thinking, clean := extractThinkingTags(finalContent)
-				a.AddMessage(Message{Role: RoleAssistant, Content: clean, Thinking: thinking, ThinkingTime: responseTime, Sources: a.pendingSources})
+				a.AddMessage(Message{Role: RoleAssistant, Content: clean, Thinking: thinking, ThinkingTime: responseTime, Sources: a.pendingSources, Tokens: msg.tokens, Duration: responseTime, TPS: a.lastTPS})
 			}
 			a.AddMessage(Message{Role: RoleError, Content: msg.err.Error()})
 			cmds = append(cmds, a.SetNotification(fmt.Sprintf("× Error after %s", responseTime), NotifyError))
@@ -423,8 +431,15 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				Thinking:     thinking,
 				ThinkingTime: responseTime,
 				Sources:      a.pendingSources,
+				Tokens:       msg.tokens,
+				Duration:     responseTime,
+				TPS:          a.lastTPS,
 			})
-			cmds = append(cmds, a.SetNotification(fmt.Sprintf("◇ %s · %s · %dtok", a.modelName, responseTime, msg.tokens), NotifyInfo))
+			notif := fmt.Sprintf("◇ %s · %s · %d tok", a.modelName, responseTime, msg.tokens)
+			if a.lastTPS > 0 {
+				notif += fmt.Sprintf(" · %.1f tok/s", a.lastTPS)
+			}
+			cmds = append(cmds, a.SetNotification(notif, NotifyInfo))
 		}
 
 		a.saveSession()
@@ -740,6 +755,7 @@ func (a *App) startStreamPrompt(prompt string) tea.Cmd {
 	a.streaming = true
 	a.pendingSources = nil
 	a.waiting = false
+	a.streamChunkCount = 0
 	a.streamStartTime = time.Now()
 	a.streamMu.Lock()
 	a.streamBuf.Reset()
@@ -1395,7 +1411,19 @@ func (a *App) renderHistoryBlock() string {
 			if strings.TrimSpace(content) != "" || strings.TrimSpace(thinking) != "" {
 				asstTag := lipgloss.NewStyle().Bold(true).Foreground(a.cfg.Theme.Primary).Render("◈ " + a.cfg.Title)
 				tsTag := lipgloss.NewStyle().Foreground(a.cfg.Theme.Muted).Render(" · " + m.Timestamp.Format("15:04"))
-				sb.WriteString(asstTag + tsTag + "\n\n")
+				var statTag string
+				if m.Tokens > 0 {
+					tpsVal := m.TPS
+					if tpsVal <= 0 && m.Duration.Seconds() > 0 {
+						tpsVal = float64(m.Tokens) / m.Duration.Seconds()
+					}
+					if tpsVal > 0 {
+						statTag = lipgloss.NewStyle().Foreground(a.cfg.Theme.Muted).Render(fmt.Sprintf(" · %d tok (%.1f tok/s)", m.Tokens, tpsVal))
+					} else {
+						statTag = lipgloss.NewStyle().Foreground(a.cfg.Theme.Muted).Render(fmt.Sprintf(" · %d tok", m.Tokens))
+					}
+				}
+				sb.WriteString(asstTag + tsTag + statTag + "\n\n")
 
 				if strings.TrimSpace(thinking) != "" {
 					sb.WriteString(a.renderThinkingCard(thinking, m.ThinkingOpen, m.ThinkingTime))
@@ -1949,6 +1977,26 @@ func (a *App) renderSidebar(w, h int) string {
 	}
 	lines = append(lines, "")
 
+	// Speed (tok/sec)
+	lines = append(lines, label.Render("speed"))
+	if a.lastTPS > 0 {
+		lines = append(lines, val.Render(fmt.Sprintf("%.1f tok/s", a.lastTPS)))
+	} else {
+		lines = append(lines, dim.Render("—"))
+	}
+	lines = append(lines, "")
+
+	// Tokens
+	if a.lastTokens > 0 || a.totalTokens > 0 {
+		lines = append(lines, label.Render("tokens"))
+		if a.lastTokens > 0 {
+			lines = append(lines, val.Render(fmt.Sprintf("%d (tot: %d)", a.lastTokens, a.totalTokens)))
+		} else {
+			lines = append(lines, val.Render(fmt.Sprintf("%d", a.totalTokens)))
+		}
+		lines = append(lines, "")
+	}
+
 	// Duration
 	lines = append(lines, label.Render("session"))
 	elapsed := time.Since(a.startTime).Truncate(time.Second)
@@ -2056,6 +2104,9 @@ func (a *App) View() tea.View {
 		} else if a.totalTokens > 0 && sidebarW == 0 {
 			right += dim.Render(fmt.Sprintf(" · %dtok", a.totalTokens))
 		}
+		if a.lastTPS > 0 && sidebarW == 0 {
+			right += dim.Render(fmt.Sprintf(" · %.1f tok/s", a.lastTPS))
+		}
 		// Keep the header on one line: the info wins over the working directory.
 		if maxRight := a.width - 24; maxRight > 10 && lipgloss.Width(right) > maxRight {
 			right = ansi.Truncate(right, maxRight, "…")
@@ -2079,6 +2130,10 @@ func (a *App) View() tea.View {
 		var indicator string
 		if a.streaming {
 			streamText := "streaming…"
+			secs := time.Since(a.streamStartTime).Seconds()
+			if secs > 0.3 && a.streamChunkCount > 0 {
+				streamText = fmt.Sprintf("streaming (%.1f tok/s)…", float64(a.streamChunkCount)/secs)
+			}
 			phase := int(time.Now().UnixMilli()/120) % len(streamText)
 			streamColors := []color.Color{
 				lipgloss.Color("#2ECC71"), lipgloss.Color("#27AE60"), lipgloss.Color("#1ABC9C"), lipgloss.Color("#16A085"), lipgloss.Color("#00B894"),
@@ -2130,6 +2185,10 @@ func (a *App) View() tea.View {
 				mins := int(secs) / 60
 				remSecs := secs - float64(mins*60)
 				streamTimer = fmt.Sprintf("⋯ streaming %02d:%04.1fs", mins, remSecs)
+			}
+			if secs > 0.3 && a.streamChunkCount > 0 {
+				liveTPS := float64(a.streamChunkCount) / secs
+				streamTimer += fmt.Sprintf(" · %d tok · %.1f tok/s", a.streamChunkCount, liveTPS)
 			}
 			left := dim.Render(" Esc cancel · Ctrl+Y copy · Ctrl+C quit")
 			right := dim.Render(streamTimer)

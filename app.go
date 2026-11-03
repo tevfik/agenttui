@@ -99,12 +99,16 @@ type App struct {
 	cacheCount      int
 	historySave     string
 	sidebarHidden   bool
-	streamStartTime time.Time
-	streamMu        *sync.Mutex
-	ask             *askState
-	form            *formState
-	editingField    bool
-	askSeq          int
+	streamStartTime  time.Time
+	streamMu         *sync.Mutex
+	lastTokens       int
+	lastDuration     time.Duration
+	lastTPS          float64
+	streamChunkCount int
+	ask              *askState
+	form             *formState
+	editingField     bool
+	askSeq           int
 }
 
 // New creates a new extensible Agent TUI instance.
@@ -419,6 +423,10 @@ func (a *App) ResetSession() {
 	a.changedFiles = nil
 	a.contextUsed = 0
 	a.totalTokens = 0
+	a.lastTokens = 0
+	a.lastDuration = 0
+	a.lastTPS = 0
+	a.streamChunkCount = 0
 	a.historyIdx = -1
 	a.startTime = time.Now()
 	a.mu.Unlock()
@@ -428,6 +436,20 @@ func (a *App) ResetSession() {
 		a.viewport.SetContent(a.renderMessages())
 		a.viewport.GotoTop()
 	}
+}
+
+// LastTPS returns the tokens per second achieved on the last assistant turn.
+func (a *App) LastTPS() float64 {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.lastTPS
+}
+
+// LastTokens returns the token count of the last assistant turn.
+func (a *App) LastTokens() int {
+	a.mu.RLock()
+	defer a.mu.RUnlock()
+	return a.lastTokens
 }
 
 // RewindLastTurn pops the last assistant response (and any associated tool calls)
