@@ -570,4 +570,3 @@ func TestSpeedAndTokensMetrics(t *testing.T) {
 	assert.Contains(t, sidebar, "tok/s")
 	assert.Contains(t, sidebar, "tokens")
 }
-
