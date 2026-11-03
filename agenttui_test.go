@@ -344,25 +344,20 @@ func TestApp_SlashCommandDuringStreaming(t *testing.T) {
 	require.True(t, app.autoActive)
 
 	_, cmd := app.Update(tea.KeyPressMsg{Code: tea.KeyEnter})
-	assert.NotNil(t, cmd)
+	assert.Nil(t, cmd)
 
-	// Stream should have been canceled and reset
-	assert.False(t, app.streaming)
+	// The stream is not cancelled; the command waits in the queue.
+	assert.True(t, app.streaming)
+	assert.Equal(t, []string{"/plan"}, app.QueuedMessages())
+	assert.False(t, planRan)
 
-	// Execute command batch
-	if cmd != nil {
-		msg := cmd()
-		if batch, ok := msg.(tea.BatchMsg); ok {
-			for _, subCmd := range batch {
-				if subCmd != nil {
-					resMsg := subCmd()
-					app.Update(resMsg)
-				}
-			}
-		}
-	}
+	// When the response finishes the queued command runs.
+	_, cmd = app.Update(streamDoneMsg{})
+	require.NotNil(t, cmd)
+	assert.Empty(t, app.QueuedMessages())
+	runCmd(app, cmd)
 
-	assert.True(t, planRan, "Slash command must be executable while streaming")
+	assert.True(t, planRan, "Queued slash command must run once the stream is done")
 }
 
 func TestApp_TokenBar(t *testing.T) {
@@ -919,4 +914,24 @@ func TestApp_SidebarFirstKeepsWidgetOnShortTerminal(t *testing.T) {
 			t.Errorf("SidebarFirst=%v: widget visible=%v", first, has)
 		}
 	}
+}
+
+// runCmd executes a command (descending into batches) and feeds the results
+// back into the app.
+func runCmd(app *App, cmd tea.Cmd) {
+	if cmd == nil {
+		return
+	}
+	msg := cmd()
+	if batch, ok := msg.(tea.BatchMsg); ok {
+		for _, c := range batch {
+			runCmd(app, c)
+		}
+		return
+	}
+	if msg == nil {
+		return
+	}
+	_, next := app.Update(msg)
+	_ = next
 }

@@ -125,7 +125,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch keyStr {
 		case "ctrl+c":
 			if a.streaming {
-				a.cancelStream()
+				a.cancelStreamAndQueue()
 				return a, nil
 			}
 			a.quitting = true
@@ -134,7 +134,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case "esc":
 			if a.streaming {
-				a.cancelStream()
+				a.cancelStreamAndQueue()
 				return a, nil
 			}
 			if a.autoActive {
@@ -275,16 +275,17 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					return a, nil
 				}
 
-				// If actively streaming or waiting, cancel it first to run the slash command
-				if a.streaming || a.waiting {
-					a.cancelStream()
-				}
-
-				// Otherwise (no arguments or optional arguments), execute immediately!
+				// No arguments or optional arguments: run it now, or queue it
+				// when a stream or command is still in flight.
 				cmdStr := "/" + selected.Name
 				a.textarea.Reset()
 				a.history = append(a.history, cmdStr)
 				a.historyIdx = -1
+				if a.busy() {
+					a.queue = append(a.queue, cmdStr)
+					a.recalcViewport()
+					return a, nil
+				}
 				cmd := a.handleSubmit(cmdStr)
 				a.recalcViewport()
 				return a, cmd
@@ -292,15 +293,18 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 			val := strings.TrimSpace(a.textarea.Value())
 			if val != "" {
-				// If actively streaming or waiting, cancel ongoing stream to process this new command/prompt!
-				if a.streaming || a.waiting {
-					a.cancelStream()
-				}
-
 				a.textarea.Reset()
 				a.autoActive = false
 				a.history = append(a.history, val)
 				a.historyIdx = -1
+
+				// Busy: queue it; it is sent, in order, when the current
+				// response (or command) is done. Nothing is cancelled.
+				if a.busy() {
+					a.queue = append(a.queue, val)
+					a.recalcViewport()
+					return a, nil
+				}
 
 				cmd := a.handleSubmit(val)
 				a.recalcViewport()
@@ -310,6 +314,36 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return a, tea.Batch(cmds...)
 			}
 			return a, nil
+
+		case "ctrl+x", "ctrl+enter":
+			// Send now: cut the running response short (kept in the history
+			// marked "interrupted") and send the typed text immediately. With
+			// an empty input it promotes the first queued message instead.
+			val := strings.TrimSpace(a.textarea.Value())
+			if val != "" {
+				a.textarea.Reset()
+				a.autoActive = false
+				a.history = append(a.history, val)
+				a.historyIdx = -1
+			} else if a.busy() && len(a.queue) > 0 {
+				val = a.queue[0]
+				a.queue = a.queue[1:]
+			}
+			if val == "" {
+				return a, nil
+			}
+			if a.waiting && !a.streaming {
+				// A command is running and cannot be interrupted: go first.
+				a.queue = append([]string{val}, a.queue...)
+				a.recalcViewport()
+				return a, nil
+			}
+			if a.streaming {
+				a.cancelStream("interrupted")
+			}
+			cmd := a.handleSubmit(val)
+			a.recalcViewport()
+			return a, cmd
 
 		case " ", "space":
 			if a.autoActive && a.autoMode == "at" && len(a.autoAtFiles) > 0 {
@@ -356,6 +390,12 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return a, nil
 
+	case genMsg:
+		if msg.gen != a.streamGen {
+			return a, nil // late message of a cancelled stream
+		}
+		return a.Update(msg.inner)
+
 	case streamChunkMsg:
 		if !a.streaming {
 			return a, nil
@@ -366,7 +406,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		a.viewport.SetContent(a.renderMessagesfast())
 		a.viewport.GotoBottom()
-		return a, waitForStream(a.streamCh)
+		return a, waitForStream(a.streamCh, a.streamGen)
 
 	case streamEventMsg:
 		if !a.streaming {
@@ -384,7 +424,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.cacheCount = 0
 		a.viewport.SetContent(a.renderMessages())
 		a.viewport.GotoBottom()
-		return a, waitForStream(a.streamCh)
+		return a, waitForStream(a.streamCh, a.streamGen)
 
 	case streamDoneMsg:
 		if !a.streaming {
@@ -432,6 +472,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.recalcViewport()
 		a.viewport.SetContent(a.renderMessages())
 		a.viewport.GotoBottom()
+		cmds = append(cmds, a.drainQueue())
 		return a, tea.Batch(cmds...)
 
 	case streamEndMsg:
@@ -440,7 +481,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.recalcViewport()
 		a.viewport.SetContent(a.renderMessages())
 		a.viewport.GotoBottom()
-		return a, nil
+		return a, a.drainQueue()
 
 	case slashDoneMsg:
 		a.waiting = false
@@ -462,7 +503,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.recalcViewport()
 		a.viewport.SetContent(a.renderMessages())
 		a.viewport.GotoBottom()
-		return a, nil
+		return a, a.drainQueue()
 
 	case spinner.TickMsg:
 		// Only tick when actively streaming or waiting! Prevents runaway loops.
@@ -511,7 +552,47 @@ func (a *App) flushStreamBuf() {
 	a.AddMessage(Message{Role: RoleAssistant, Content: clean, Thinking: thinking})
 }
 
-func (a *App) cancelStream() {
+// busy reports whether a stream or a command is in flight.
+func (a *App) busy() bool { return a.streaming || a.waiting }
+
+// QueuedMessages returns the messages waiting to be sent, oldest first.
+func (a *App) QueuedMessages() []string { return append([]string(nil), a.queue...) }
+
+// drainQueue sends queued messages, in order, as long as the app is idle. A
+// queued prompt starts a stream (the rest wait for it); local commands finish
+// at once and the loop goes on.
+func (a *App) drainQueue() tea.Cmd {
+	var cmds []tea.Cmd
+	for len(a.queue) > 0 && !a.busy() {
+		next := a.queue[0]
+		a.queue = a.queue[1:]
+		if c := a.handleSubmit(next); c != nil {
+			cmds = append(cmds, c)
+		}
+	}
+	a.recalcViewport()
+	return tea.Batch(cmds...)
+}
+
+// cancelStreamAndQueue is Esc / Ctrl+C: cancel the response and discard the
+// queued messages (they stay in the up-arrow input history).
+func (a *App) cancelStreamAndQueue() {
+	n := len(a.queue)
+	a.queue = nil
+	a.cancelStream("cancelled")
+	if n > 0 {
+		a.AddMessage(Message{Role: RoleSystem, Content: fmt.Sprintf("_(%d queued message(s) discarded)_", n)})
+		a.cacheCount = 0
+		a.recalcViewport()
+		a.viewport.SetContent(a.renderMessages())
+		a.viewport.GotoBottom()
+	}
+}
+
+// cancelStream stops the running response; the partial answer is kept in the
+// conversation marked with label ("cancelled" or "interrupted"). The queue is
+// left alone.
+func (a *App) cancelStream(label string) {
 	if a.streamCancel != nil {
 		a.streamCancel()
 	}
@@ -521,15 +602,36 @@ func (a *App) cancelStream() {
 	a.streamMu.Unlock()
 	a.streaming = false
 	a.waiting = false
+	mark := "_(" + label + ")_"
 	if partial != "" {
-		a.AddMessage(Message{Role: RoleAssistant, Content: partial + "\n\n_(cancelled)_"})
+		a.AddMessage(Message{Role: RoleAssistant, Content: partial + "\n\n" + mark})
 	} else {
-		a.AddMessage(Message{Role: RoleSystem, Content: "_(cancelled)_"})
+		a.AddMessage(Message{Role: RoleSystem, Content: mark})
 	}
 	a.cacheCount = 0
 	a.recalcViewport()
 	a.viewport.SetContent(a.renderMessages())
 	a.viewport.GotoBottom()
+}
+
+// renderQueueLines is the "queued" indicator shown above the input.
+func (a *App) renderQueueLines() []string {
+	if len(a.queue) == 0 {
+		return nil
+	}
+	dim := lipgloss.NewStyle().Foreground(a.cfg.Theme.Muted)
+	const show = 3
+	var out []string
+	for i, q := range a.queue {
+		if i == show {
+			out = append(out, dim.Render(fmt.Sprintf("   … +%d more queued", len(a.queue)-show)))
+			break
+		}
+		q = strings.Join(strings.Fields(q), " ")
+		w := max(a.width-22, 10)
+		out = append(out, dim.Render(fmt.Sprintf(" ⏳ queued %d/%d: ", i+1, len(a.queue))+ansi.Truncate(q, w, "…")))
+	}
+	return out
 }
 
 func (a *App) handleSubmit(input string) tea.Cmd {
@@ -744,6 +846,7 @@ func (a *App) startStreamPrompt(prompt string) tea.Cmd {
 	a.streamMu.Lock()
 	a.streamBuf.Reset()
 	a.streamMu.Unlock()
+	a.streamGen++
 	a.streamCh = make(chan tea.Msg, 64)
 	a.streamCtx, a.streamCancel = context.WithCancel(context.Background())
 
@@ -784,11 +887,19 @@ func (a *App) startStreamPrompt(prompt string) tea.Cmd {
 		} else {
 			tokens, err = a.cfg.Stream(ctx, p, func(chunk string) { send(streamChunkMsg{chunk: chunk}) })
 		}
-		ch <- streamDoneMsg{tokens: tokens, err: err}
+		done := streamDoneMsg{tokens: tokens, err: err}
+		if ctx.Err() != nil {
+			select { // cancelled: nobody may be reading any more
+			case ch <- done:
+			default:
+			}
+		} else {
+			ch <- done
+		}
 		close(ch)
 	}(prompt, a.streamCh, a.streamCtx)
 
-	return tea.Batch(a.spinner.Tick, waitForStream(a.streamCh))
+	return tea.Batch(a.spinner.Tick, waitForStream(a.streamCh, a.streamGen))
 }
 
 func (a *App) renderTokenBar(barW int) string {
@@ -1055,6 +1166,7 @@ func (a *App) chromeHeight() int {
 	if a.waiting || a.streaming {
 		h++ // status indicator
 	}
+	h += len(a.renderQueueLines())
 	if a.autoActive && (len(a.autoFiltered) > 0 || len(a.autoAtFiles) > 0) {
 		popup := a.renderAutocomplete()
 		h += strings.Count(popup, "\n") + 1
@@ -2089,12 +2201,14 @@ func (a *App) View() tea.View {
 				idx := (i + phase) % len(streamColors)
 				coloredText.WriteString(lipgloss.NewStyle().Foreground(streamColors[idx]).Render(string(ch)))
 			}
-			indicator = a.spinner.View() + " " + coloredText.String() + dim.Render(" (type to redirect · Esc cancel)")
+			indicator = a.spinner.View() + " " + coloredText.String() + dim.Render(" (Enter queue · Ctrl+X send now · Esc cancel)")
 		} else {
 			indicator = a.spinner.View() + " " + lipgloss.NewStyle().Foreground(a.cfg.Theme.SubText).Italic(true).Render("thinking…")
 		}
 		bottomLines = append(bottomLines, " "+indicator)
 	}
+
+	bottomLines = append(bottomLines, a.renderQueueLines()...)
 
 	if a.form != nil {
 		bottomLines = append(bottomLines, a.renderForm()...)
@@ -2131,7 +2245,7 @@ func (a *App) View() tea.View {
 				remSecs := secs - float64(mins*60)
 				streamTimer = fmt.Sprintf("⋯ streaming %02d:%04.1fs", mins, remSecs)
 			}
-			left := dim.Render(" Esc cancel · Ctrl+Y copy · Ctrl+C quit")
+			left := dim.Render(" Enter queue · Ctrl+X send now · Esc cancel · Ctrl+Y copy")
 			right := dim.Render(streamTimer)
 			gap := a.width - lipgloss.Width(left) - lipgloss.Width(right) - 2
 			if gap < 1 {

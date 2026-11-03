@@ -27,6 +27,13 @@ type streamDoneMsg struct {
 	err    error
 }
 type streamEndMsg struct{}
+
+// genMsg tags a stream message with the generation of the stream that produced
+// it, so late messages of a cancelled stream can never touch a newer one.
+type genMsg struct {
+	gen   int
+	inner tea.Msg
+}
 type streamEventMsg struct{ ev Event }
 type slashDoneMsg struct {
 	input   string
@@ -68,6 +75,8 @@ type App struct {
 	streamCh       chan tea.Msg
 	streamCtx      context.Context
 	streamCancel   context.CancelFunc
+	streamGen      int      // generation of the current stream (see genMsg)
+	queue          []string // submitted while busy; sent in order when the app is idle
 
 	// Context window tracking
 	contextUsed int
@@ -557,13 +566,13 @@ func (a *App) Run(ctx context.Context) error {
 	return err
 }
 
-func waitForStream(ch <-chan tea.Msg) tea.Cmd {
+func waitForStream(ch <-chan tea.Msg, gen int) tea.Cmd {
 	return func() tea.Msg {
 		msg, ok := <-ch
 		if !ok {
-			return streamEndMsg{}
+			return genMsg{gen, streamEndMsg{}}
 		}
-		return msg
+		return genMsg{gen, msg}
 	}
 }
 

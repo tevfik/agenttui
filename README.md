@@ -93,7 +93,10 @@ func main() {
 | `↑` / `↓` | Navigate command popup or browse command history |
 | `Ctrl+Y` | Copy latest assistant response to system clipboard |
 | `Ctrl+M` | Toggle mouse capture (switch between wheel scroll & native terminal selection) |
-| `Ctrl+C` / `Esc` | Cancel streaming response or clear input |
+| `Enter` while a response is streaming | Queue the message (shown as "queued" above the input); queued messages are sent in order when the response ends. Nothing is cancelled. Slash commands queue too |
+| `Ctrl+X` (or `Ctrl+Enter` where the terminal reports it) | Send now: cut the running response short (the partial answer stays in the transcript marked `_(interrupted)_`), then send the typed text. With an empty input it promotes the first queued message. The rest of the queue is kept |
+| `Ctrl+C` / `Esc` while streaming | Cancel the response (partial kept, marked `_(cancelled)_`) and discard the queued messages (a note says how many; they remain in the up-arrow history) |
+| `Ctrl+C` / `Esc` otherwise | Quit (Ctrl+C) / clear popups
 
 ---
 
