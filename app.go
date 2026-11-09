@@ -125,6 +125,7 @@ type App struct {
 	lastDuration     time.Duration
 	lastTPS          float64
 	streamChunkCount int
+	streamFirstChunk time.Time // when the first text arrived: speed counts from here, not from the request (prefill and queue are not decode)
 	ask              *askState
 	form             *formState
 	editingField     bool
@@ -448,6 +449,7 @@ func (a *App) ResetSession() {
 	a.lastDuration = 0
 	a.lastTPS = 0
 	a.streamChunkCount = 0
+	a.streamFirstChunk = time.Time{}
 	a.historyIdx = -1
 	a.startTime = time.Now()
 	a.mu.Unlock()

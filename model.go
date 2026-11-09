@@ -400,7 +400,12 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		a.streamMu.Lock()
 		a.streamBuf.WriteString(msg.chunk)
-		a.streamChunkCount++
+		if msg.chunk != "" && msg.chunk != "<think>" && msg.chunk != "</think>" { // the markers are not tokens
+			if a.streamChunkCount == 0 {
+				a.streamFirstChunk = time.Now()
+			}
+			a.streamChunkCount++
+		}
 		a.streamMu.Unlock()
 
 		a.streamDirty = true
@@ -440,11 +445,7 @@ func (a *App) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		a.lastTokens = msg.tokens
 		responseTime := time.Since(a.streamStartTime).Truncate(100 * time.Millisecond)
 		a.lastDuration = responseTime
-		if responseTime.Seconds() > 0 && msg.tokens > 0 {
-			a.lastTPS = float64(msg.tokens) / responseTime.Seconds()
-		} else {
-			a.lastTPS = 0
-		}
+		a.lastTPS = a.decodeTPS(msg.tokens, time.Now())
 
 		if msg.err != nil {
 			if finalContent != "" {
@@ -849,6 +850,7 @@ func (a *App) startStreamPrompt(prompt string) tea.Cmd {
 	a.pendingSources = nil
 	a.waiting = false
 	a.streamChunkCount = 0
+	a.streamFirstChunk = time.Time{}
 	a.streamStartTime = time.Now()
 	a.streamMu.Lock()
 	a.streamBuf.Reset()
@@ -2254,9 +2256,8 @@ func (a *App) View() tea.View {
 		var indicator string
 		if a.streaming {
 			streamText := "streaming…"
-			secs := time.Since(a.streamStartTime).Seconds()
-			if secs > 0.3 && a.streamChunkCount > 0 {
-				streamText = fmt.Sprintf("streaming (%.1f tok/s)…", float64(a.streamChunkCount)/secs)
+			if tps := a.decodeTPS(a.streamChunkCount, time.Now()); tps > 0 {
+				streamText = fmt.Sprintf("streaming (%.1f tok/s)…", tps)
 			}
 			phase := int(time.Now().UnixMilli()/120) % len(streamText)
 			streamColors := []color.Color{
@@ -2312,9 +2313,11 @@ func (a *App) View() tea.View {
 				remSecs := secs - float64(mins*60)
 				streamTimer = fmt.Sprintf("⋯ streaming %02d:%04.1fs", mins, remSecs)
 			}
-			if secs > 0.3 && a.streamChunkCount > 0 {
-				liveTPS := float64(a.streamChunkCount) / secs
-				streamTimer += fmt.Sprintf(" · %d tok · %.1f tok/s", a.streamChunkCount, liveTPS)
+			if a.streamChunkCount > 0 {
+				streamTimer += fmt.Sprintf(" · %d tok", a.streamChunkCount)
+				if tps := a.decodeTPS(a.streamChunkCount, time.Now()); tps > 0 {
+					streamTimer += fmt.Sprintf(" · %.1f tok/s", tps)
+				}
 			}
 			left := dim.Render(" Enter queue · Ctrl+X send now · Esc cancel · Ctrl+Y copy")
 			right := dim.Render(streamTimer)
@@ -2483,4 +2486,29 @@ func sourceLabel(s Source) string {
 		parts = append(parts, fmt.Sprintf("%.2f", s.Score))
 	}
 	return strings.Join(parts, " · ")
+}
+
+// decodeTPS is the generation speed: tokens after the first one over the time since the first one arrived. Counting
+// from the request instead would put the prompt processing, a queue or a model load into it (a 122B split model read
+// 6 tok/s while it decoded at 7). Without a first-chunk time (a reply that never streamed text) the request start is
+// used. 0 while there is too little to go on.
+func (a *App) decodeTPS(tokens int, now time.Time) float64 {
+	from := a.streamFirstChunk
+	if from.IsZero() {
+		if tokens <= 0 {
+			return 0
+		}
+		return rateOver(float64(tokens), now.Sub(a.streamStartTime))
+	}
+	if tokens < 2 {
+		return 0
+	}
+	return rateOver(float64(tokens-1), now.Sub(from))
+}
+
+func rateOver(n float64, d time.Duration) float64 {
+	if d < 300*time.Millisecond {
+		return 0
+	}
+	return n / d.Seconds()
 }

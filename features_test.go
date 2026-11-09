@@ -570,3 +570,32 @@ func TestSpeedAndTokensMetrics(t *testing.T) {
 	assert.Contains(t, sidebar, "tok/s")
 	assert.Contains(t, sidebar, "tokens")
 }
+
+// The speed counts from the first token: 5 s of prompt processing before 70 tokens in 10 s is 7 tok/s, not 4.7.
+func TestSpeedCountsFromFirstChunk(t *testing.T) {
+	a := newSizedApp(Config{})
+	a.streaming = true
+	now := time.Now()
+	a.streamStartTime = now.Add(-15 * time.Second)
+	a.Update(streamChunkMsg{chunk: "<think>"})
+	a.streamFirstChunk = now.Add(-10 * time.Second)
+	a.streamChunkCount = 71
+	assert.InDelta(t, 7.0, a.decodeTPS(a.streamChunkCount, now), 0.01)
+	assert.Contains(t, ansi.Strip(a.View().Content), "tok/s")
+	a.Update(streamDoneMsg{tokens: 71})
+	assert.InDelta(t, 7.0, a.LastTPS(), 0.05)
+}
+
+// Think markers are not tokens and do not start the clock.
+func TestThinkMarkersNotCounted(t *testing.T) {
+	a := newSizedApp(Config{})
+	a.streaming = true
+	a.streamStartTime = time.Now()
+	a.Update(streamChunkMsg{chunk: "<think>"})
+	a.Update(streamChunkMsg{chunk: "</think>"})
+	assert.Equal(t, 0, a.streamChunkCount)
+	assert.True(t, a.streamFirstChunk.IsZero())
+	a.Update(streamChunkMsg{chunk: "hi"})
+	assert.Equal(t, 1, a.streamChunkCount)
+	assert.False(t, a.streamFirstChunk.IsZero())
+}
